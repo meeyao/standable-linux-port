@@ -1,0 +1,37 @@
+#!/bin/bash
+# launch_serverhelper.sh — spawn ignition_server.exe in shared host-context prefix.
+# FIRING ORDER MATTERS: every "$PROTON run" triggers Proton prefix maintenance
+# which DELETES custom dosdevices links (s:) mid-pass. Proton invocations go in
+# background FIRST; s: is fixed immediately and a 60s repair loop heals any
+# late pass. Never gate driver startup.
+# NOTE: HKCU\Software\Wine\VR is NOT required (empirically verified 2026-08-23:
+# GUI renders + T-pose works with key absent); vr_bootstrap.exe kept in prefix
+# for diagnostics only.
+
+unset SteamGameId
+
+export STEAM_COMPAT_DATA_PATH="@COMPAT@"
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
+PROTON="@STEAM_ROOT@/steamapps/common/Proton - Experimental/proton"
+S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
+# Drive convention differs by Proton build: newer Valve Protons manage the
+# s: drive themselves (gamedrive -> Steam PARENT dir, paths like
+# S:\steamapps\common\...), older forks don't manage it (use steamapps dir,
+# paths like S:\common\...). Match whichever the build enforces; the driver
+# derives paths from its CWD mapping at runtime, so consistency is all that
+# matters.
+PROTON_DIR="$(dirname "$PROTON")"
+if grep -q 'gamedrive", "s:"' "$PROTON_DIR/proton" 2>/dev/null; then
+    S_TARGET="@STEAM_ROOT@"
+else
+    S_TARGET="@STEAM_ROOT@/steamapps"
+fi
+fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
+
+# PSVR2 Sense controller support (Ignition) — proton run, may wipe s:
+"$PROTON" run reg import ./wine_psvr2_hidraw.reg >/dev/null 2>&1 &
+
+fix_s
+( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; done ) &
+
+exec "$PROTON" run "$@"
