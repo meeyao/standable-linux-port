@@ -9,7 +9,7 @@ Requires: Arch-based Linux, Steam + **SteamVR** installed, and the game
 (Steam AppId **2370570**) installed. Any Proton build works.
 
 ```sh
-git clone <repo-url> && cd standable-linux-port-public
+git clone https://github.com/meeyao/standable-linux-port.git && cd standable-linux-port
 ./install.sh
 ```
 
