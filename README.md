@@ -12,7 +12,7 @@ substituting the official upstream release, and building from source.
 
 ## Install
 
-Requires an Arch-based system with:
+Requires Linux with a native (non-Flatpak) Steam install:
 
 - **Steam** and **SteamVR** installed
 - Standable Full Body Estimation installed (AppId **2370570**)
@@ -32,6 +32,15 @@ Then:
 
 Sliders apply in realtime and T-pose calibration works. The installer also
 creates a "Standable GUI" desktop entry if you prefer clicking.
+
+## Compatibility
+
+- Tested with **Steam Link** (on-PC and local network).
+- **WiVRN** is not supported; the SteamVR driver loading path it uses
+  is incompatible with this patch.
+- **ALVR** has not been tested yet.
+- Standable's **mixed tracking** (combining Standable with SlimeVR,
+  hardware trackers, etc.) works as it does on Windows.
 
 ## Options
 
