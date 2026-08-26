@@ -1,0 +1,3 @@
+# Binaries shipped in this directory (see ../BUILDING.md for provenance)
+6affef116bd3f007ceef40e209c4b79a8dca1babc0ba5404c8f5bc9c7c8364ca  libdriver_ignition.so
+a1f31ee6e33bf03f0a214573c6e8ae883f0c1accc262b9cb70867c63bdb02b34  ignition_server.exe
