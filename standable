@@ -27,6 +27,8 @@ case "${1:-help}" in
         shift
         exec "$DIR/install.sh" "$@"
         ;;
+    --version|-v)
+        echo "standable v3.0.0"; exit 0;;
     help|--help|-h|*)
         cat <<EOF
 Standable Full Body Estimation — Linux patch
