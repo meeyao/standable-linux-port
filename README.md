@@ -6,7 +6,7 @@ No game files are modified.
 
 Based on [Ignition](https://github.com/BnuuySolutions/Ignition) by
 Bnuuy Solutions (MIT), which provides the SteamVR↔Proton bridge this patch
-deploys — see `vendor/IGNITION-LICENSE`. Prefer not to use the prebuilt
+deploys; see `vendor/IGNITION-LICENSE`. Prefer not to use the prebuilt
 binaries we ship? [BUILDING.md](BUILDING.md) covers hash verification,
 substituting the official upstream release, and building from source.
 
@@ -29,7 +29,7 @@ Then:
 1. Start **SteamVR**
 2. Launch the **Standable GUI** desktop icon
 
-That's it — sliders apply in realtime and T-pose calibration works.
+That's it: sliders apply in realtime and T-pose calibration works.
 
 ## Options
 
@@ -69,8 +69,8 @@ SteamVR loads a small Linux shim (`driver_standable.so`) as a native driver.
 The shim spawns Ignition's `ignition_server.exe` under Proton in the game's
 existing prefix, which loads the game's own Windows driver DLL. The GUI also
 runs under that same prefix and Proton build, so GUI and driver share a
-single wine server — named pipes between them are what make settings updates
-realtime. A few helper stubs satisfy the GUI's SteamVR presence checks, and
+single wine server; the named pipes between them are what make settings
+updates realtime. A few helper stubs satisfy the GUI's SteamVR presence checks, and
 the installer keeps the prefix's drive links alive against Proton's
 per-launch maintenance passes.
 
