@@ -12,7 +12,7 @@ unset SteamGameId
 
 export STEAM_COMPAT_DATA_PATH="@COMPAT@"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
-PROTON="@STEAM_ROOT@/steamapps/common/Proton - Experimental/proton"
+PROTON="@PROTON@"
 S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # Drive convention differs by Proton build: newer Valve Protons manage the
 # s: drive themselves (gamedrive -> Steam PARENT dir, paths like
@@ -21,7 +21,7 @@ S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # derives paths from its CWD mapping at runtime, so consistency is all that
 # matters.
 PROTON_DIR="$(dirname "$PROTON")"
-if grep -q 'gamedrive", "s:"' "$PROTON_DIR/proton" 2>/dev/null; then
+if grep -q 'get_validated_steamapps_parent' "$PROTON_DIR/proton" 2>/dev/null; then
     S_TARGET="@STEAM_ROOT@"
 else
     S_TARGET="@STEAM_ROOT@/steamapps"

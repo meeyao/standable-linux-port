@@ -60,6 +60,14 @@ pick_proton() {
         [ -x "$PROTON_OVERRIDE" ] || die "--proton: not executable: $PROTON_OVERRIDE"
         PROTON="$PROTON_OVERRIDE"; return 0
     fi
+    # Preserve the existing proton choice if the scripts already work.
+    # Silently switching builds breaks gamedrive conventions and s: links.
+    local existing=""
+    for f in "$HOME/bin/standable-gui" "$GAME_DIR/bin/linux64/launch_serverhelper.sh"; do
+        [ -f "$f" ] || continue
+        existing=$(grep '^PROTON=' "$f" 2>/dev/null | head -1 | sed 's/^PROTON="//;s/"$//;s/^PROTON=//')
+        [ -n "$existing" ] && [ -x "$existing" ] && { PROTON="$existing"; return 0; }
+    done
     mapfile -t CANDS < <(find_proton_builds)
     [ ${#CANDS[@]} -gt 0 ] || die "no Proton builds found. Install one (Steam built-in Proton, Proton-GE, ...), or pass --proton /path/to/proton."
     # prefer Steam's own bundled Proton, else interactive pick, else first
@@ -199,7 +207,16 @@ STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" 
     || warn "reg add failed (will retry on next shim run)"
 
 # -- s: link -----------------------------------------------------------------
-ln -sfn "$STEAM_ROOT/steamapps" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
+# Valve Proton maps s: to the Steam parent (S:\steamapps\common\...) via
+# get_validated_steamapps_parent(). Other builds map s: to steamapps directly
+# (S:\common\...). Detect which by checking for the parent wrapper.
+PROTON_DIR_S="$(dirname "$PROTON")"
+if grep -q 'get_validated_steamapps_parent' "$PROTON_DIR_S/proton" 2>/dev/null; then
+    S_TARGET="$STEAM_ROOT"
+else
+    S_TARGET="$STEAM_ROOT/steamapps"
+fi
+ln -sfn "$S_TARGET" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
 
 # -- seed merge --------------------------------------------------------------
 say "Merging external_drivers into ~/.config/openvr/openvrpaths.vrpath…"
