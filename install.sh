@@ -254,7 +254,7 @@ cat <<EOF
        as its compatibility tool (Settings → Compatibility), or just never
        launch it from Steam. (Proton in use: $(basename "$(dirname "$PROTON")"))
     2. Start SteamVR.
-    3. Double-click the desktop icon "Standable GUI".
+    3. Run ./standable gui (or use the "Standable GUI" desktop entry).
 
   Verify anytime with:  $REPO/install.sh --check
   Problems?             See TROUBLESHOOTING.md in the repo.

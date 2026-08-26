@@ -27,7 +27,7 @@ and replace both files in `vendor/`. Their hashes:
 6f96485e12811a57a3d9fce004954202018cf789064fd0c37c5a823323330db8  ignition_server.exe
 ```
 
-(The files we ship were built from upstream commit `bbb7a70b`, one commit
+(The shipped files were built from upstream commit `bbb7a70b`, one commit
 after v1.0.0, so they differ only by that rebuild.)
 
 ## 3. Build from source
