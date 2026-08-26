@@ -186,6 +186,7 @@ fi
 
 # -- prefix binaries ---------------------------------------------------------
 # PSVR2 Sense controller registry (Ignition) — imported by the shim each run
+mkdir -p "$GAME_DIR/bin/linux64"
 bak "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg"
 cp "$REPO/config/wine_psvr2_hidraw.reg" "$GAME_DIR/bin/linux64/"
 
@@ -242,6 +243,7 @@ PYEOF
 
 # -- scripts -----------------------------------------------------------------
 say "Deploying Linux driver shim (Ignition)…"
+mkdir -p "$GAME_DIR/bin/linux64"
 bak "$GAME_DIR/bin/linux64/driver_standable.so"
 rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
 cp "$REPO/vendor/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
