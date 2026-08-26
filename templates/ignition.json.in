@@ -1,0 +1,8 @@
+{
+    "server_exe": "@GAME_DIR@/bin/linux64/ignition_server.exe",
+    "driver_dll": "../win64/driver_standable.dll",
+    "wine_cmd": [
+        "./launch_serverhelper.sh"
+    ],
+    "wait_for_debugger": false
+}

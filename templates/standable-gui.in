@@ -1,0 +1,33 @@
+#!/bin/bash
+# standable-gui — Standable FBE GUI launcher (host-context; NEVER via Steam Play:
+# pressure-vessel forks a second wineserver -> silent exit + broken pipe IPC).
+# s: is fixed late (proton maintenance wipes custom links) + repair loop post-exec.
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+export DISPLAY="${DISPLAY:-:0}"
+export STEAM_COMPAT_DATA_PATH="@COMPAT@"
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
+export PROTON_VR_RUNTIME="@STEAMVR@"
+PROTON="@STEAM_ROOT@/steamapps/common/Proton - Experimental/proton"
+S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
+# Drive convention differs by Proton build: newer Valve Protons manage the
+# s: drive themselves (gamedrive -> Steam PARENT dir, paths like
+# S:\steamapps\common\...), older forks don't manage it (use steamapps dir,
+# paths like S:\common\...). Match whichever the build enforces; the driver
+# derives paths from its CWD mapping at runtime, so consistency is all that
+# matters.
+PROTON_DIR="$(dirname "$PROTON")"
+if grep -q 'gamedrive", "s:"' "$PROTON_DIR/proton" 2>/dev/null; then
+    S_TARGET="@STEAM_ROOT@"
+else
+    S_TARGET="@STEAM_ROOT@/steamapps"
+fi
+fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
+
+cd "@GAME_DIR@" || exit 1
+
+fix_s
+( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; done ) &
+
+exec "$PROTON" run ./Standable.exe
