@@ -158,6 +158,10 @@ say "Proton     : $PROTON"
 
 [ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR — install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
+[ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing — game layout changed or incomplete install"
+for v in libdriver_ignition.so ignition_server.exe; do
+    [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing — incomplete checkout?"
+done
 
 # -- prefix bootstrap --------------------------------------------------------
 if [ ! -d "$PFX/drive_c/windows" ]; then
@@ -218,6 +222,14 @@ print("  entries:", ", ".join(e[:40] for e in ed))
 PYEOF
 
 # -- scripts -----------------------------------------------------------------
+say "Deploying Linux driver shim (Ignition)…"
+bak "$GAME_DIR/bin/linux64/driver_standable.so"
+rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
+cp "$REPO/vendor/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
+bak "$GAME_DIR/bin/linux64/ignition_server.exe"
+cp "$REPO/vendor/ignition_server.exe" "$GAME_DIR/bin/linux64/"
+gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
+
 say "Installing launchers…"
 gen() { # gen <template> <dest>
     sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
