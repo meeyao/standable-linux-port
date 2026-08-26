@@ -209,7 +209,6 @@ home = sys.argv[1]
 zpath = os.path.join(home, '.local/share/Steam/steamapps/common',
                      'Standable Full Body Estimation')
 upath = zpath
-zwin = 'Z:' + ''.join('\\' + p for p in zpath.split('/')[1:] if p)
 seed_path = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(seed_path), exist_ok=True)
 try:
@@ -219,7 +218,6 @@ except Exception:
 ed = [e for e in data.get('external_drivers', [])
       if not ('Standable' in e and ('\\' in e or upath == e))]
 if upath not in ed: ed.insert(0, upath)
-ed.insert(0, zwin)
 data['external_drivers'] = ed
 json.dump(data, open(seed_path, 'w'), indent=2)
 print("  entries:", ", ".join(e[:40] for e in ed))
