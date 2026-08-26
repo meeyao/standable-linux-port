@@ -57,6 +57,8 @@ find_proton_builds() {
 
 pick_proton() {
     if [ -n "$PROTON_OVERRIDE" ] && [ "$PROTON_OVERRIDE" != "PENDING" ]; then
+        # accept directory (append /proton) or path to proton binary
+        [ -d "$PROTON_OVERRIDE" ] && [ -x "$PROTON_OVERRIDE/proton" ] && PROTON_OVERRIDE="$PROTON_OVERRIDE/proton"
         [ -x "$PROTON_OVERRIDE" ] || die "--proton: not executable: $PROTON_OVERRIDE"
         PROTON="$PROTON_OVERRIDE"; return 0
     fi
@@ -66,7 +68,8 @@ pick_proton() {
     for f in "$HOME/bin/standable-gui" "$GAME_DIR/bin/linux64/launch_serverhelper.sh"; do
         [ -f "$f" ] || continue
         existing=$(grep '^PROTON=' "$f" 2>/dev/null | head -1 | sed 's/^PROTON="//;s/"$//;s/^PROTON=//')
-        [ -n "$existing" ] && [ -x "$existing" ] && { PROTON="$existing"; return 0; }
+        # must be a regular file (not a directory) and executable
+        [ -n "$existing" ] && [ -f "$existing" ] && [ -x "$existing" ] && { PROTON="$existing"; return 0; }
     done
     mapfile -t CANDS < <(find_proton_builds)
     [ ${#CANDS[@]} -gt 0 ] || die "no Proton builds found. Install one (Steam built-in Proton, Proton-GE, ...), or pass --proton /path/to/proton."
@@ -81,6 +84,8 @@ pick_proton() {
         PROTON="${c#*|}"; return 0
     fi
     PROTON="${CANDS[0]#*|}"
+    # sanity: if PROTON is a directory, append /proton
+    [ -d "$PROTON" ] && [ -x "$PROTON/proton" ] && PROTON="$PROTON/proton"
 }
 
 pick_prefix() {
