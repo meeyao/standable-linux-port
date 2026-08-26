@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — Standable Full Body Estimation Linux port installer (Arch Linux)
+# install.sh — Standable Full Body Estimation Linux port installer
 # Repo: https://github.com/.../standable-linux-port
 #
 #   ./install.sh              install / repair (idempotent)
@@ -112,13 +112,13 @@ if [ "${1:-}" = "--check" ]; then
     N=$(pgrep -xc wineserver | tail -1); N=${N:-0}
     if [ "$N" = 0 ]; then ok "no wineservers (nothing running)"
     elif [ "$N" = 1 ]; then ok "single wineserver (GUI+driver shared)"
-    else bad "$N wineservers running — IPC will be split!"; fi
+    else bad "$N wineservers running, IPC will be split!"; fi
     LOG="$STEAM_ROOT/logs/vrserver.txt"
     if [ -f "$LOG" ]; then
         F=$(tail -n 300 "$LOG" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
         L=$(stat -c %Y "$LOG"); NOW=$(date +%s)
         if [ $((NOW-L)) -lt 3600 ] && [ "${F:-0}" != 0 ]; then
-            warn "recent driver failures in vrserver.txt ($F) — check TROUBLESHOOTING.md"
+            warn "recent driver failures in vrserver.txt ($F), check TROUBLESHOOTING.md"
         else
             ok "vrserver.txt clean of known failure patterns"
         fi
@@ -136,7 +136,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
     say "Restored files are next to the modified ones (*.bak-*). vrpath seeds and"
-    say "the SteamPath registry key were left alone — see RESTORE.md to strip them."
+    say "the SteamPath registry key were left alone , see RESTORE.md to strip them."
     exit 0
 fi
 
@@ -144,7 +144,11 @@ fi
 for r in bash python3 tar; do require "$r"; done
 
 say "Detecting environment…"
-detect_steam_root || die "Steam not found (~/.local/share/Steam)"
+detect_steam_root || {
+    [ -d "$HOME/.var/app/com.valvesoftware.Steam" ] \
+        && die "Flatpak Steam detected but not supported, install Steam natively."
+    die "Steam not found (~/.local/share/Steam)"
+}
 detect_game_dir   || die "game '$GAME_SUBDIR' not found in any Steam library"
 pick_proton
 pick_prefix
@@ -156,20 +160,20 @@ say "Game       : $GAME_DIR"
 say "Prefix     : $COMPAT (pfx: $PFX)"
 say "Proton     : $PROTON"
 
-[ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR — install it in Steam first."
+[ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
-[ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing — game layout changed or incomplete install"
+[ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing, game layout changed or incomplete install"
 for v in libdriver_ignition.so ignition_server.exe; do
-    [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing — incomplete checkout?"
+    [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing, incomplete checkout?"
 done
 
 # -- prefix bootstrap --------------------------------------------------------
 if [ ! -d "$PFX/drive_c/windows" ]; then
-    say "Prefix missing — creating via Proton (one-time, ~30 s)…"
+    say "Prefix missing, creating via Proton (one-time, ~30 s)…"
     mkdir -p "$PFX"
     STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
         timeout 300 "$PROTON" run cmd /c exit >/dev/null 2>&1 \
-        || die "prefix creation failed — launch the game once in Steam, then re-run"
+        || die "prefix creation failed, launch the game once in Steam, then re-run"
 fi
 
 # -- prefix binaries ---------------------------------------------------------
@@ -228,6 +232,16 @@ rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
 cp "$REPO/vendor/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
 bak "$GAME_DIR/bin/linux64/ignition_server.exe"
 cp "$REPO/vendor/ignition_server.exe" "$GAME_DIR/bin/linux64/"
+
+# glibc compat check: warn early if the .so won't load on this system
+if command -v ldd >/dev/null 2>&1; then
+    _bad=$(ldd "$GAME_DIR/bin/linux64/driver_standable.so" 2>&1 | grep "not found" || true)
+    if [ -n "$_bad" ]; then
+        warn "driver_standable.so may fail to load on this system:"
+        echo "$_bad"
+        say "Rebuild from source or swap in upstream release binaries (see BUILDING.md)"
+    fi
+fi
 
 say "Installing launchers…"
 gen() { # gen <template> <dest>

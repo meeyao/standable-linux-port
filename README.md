@@ -1,11 +1,11 @@
-# Standable FBE — Linux patch (unofficial)
+# Standable FBE Linux Patch (Unofficial)
 
 Runs Standable Full Body Estimation on Linux using the game's own Windows
 binaries: driver, GUI window, realtime settings, T-pose calibration.
 No game files are modified.
 
 Based on [Ignition](https://github.com/BnuuySolutions/Ignition) by
-Bnuuy Solutions (MIT), which provides the SteamVR↔Proton bridge this patch
+Bnuuy Solutions (MIT), which provides the SteamVR-Proton bridge this patch
 deploys; see `vendor/IGNITION-LICENSE`. Prefer not to use the prebuilt
 binaries in `vendor/`? [BUILDING.md](BUILDING.md) covers hash verification,
 substituting the official upstream release, and building from source.
@@ -53,9 +53,6 @@ Whatever you pick, don't mix builds later without re-running `./install.sh`.
   breaks rendering and realtime settings.
 - Don't change the game's compatibility tool after installing; if you do,
   run `./install.sh` again so both sides use the same Proton build.
-- Keep a few GB of disk free — a full disk makes Proton's prefix setup fail
-  silently.
-
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -79,6 +76,6 @@ per-launch maintenance passes.
 
 ## Credits
 
-- [Ignition](https://github.com/BnuuySolutions/Ignition) — Bnuuy Solutions (MIT)
-- Standable Full Body Estimation — the Standable developers; this project is
+- [Ignition](https://github.com/BnuuySolutions/Ignition) by Bnuuy Solutions (MIT)
+- Standable Full Body Estimation by the Standable developers. This project is
   not affiliated with or endorsed by them.
