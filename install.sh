@@ -228,7 +228,6 @@ rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
 cp "$REPO/vendor/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
 bak "$GAME_DIR/bin/linux64/ignition_server.exe"
 cp "$REPO/vendor/ignition_server.exe" "$GAME_DIR/bin/linux64/"
-gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
 
 say "Installing launchers…"
 gen() { # gen <template> <dest>
@@ -243,6 +242,7 @@ gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 bak "$HOME/bin/standable-gui"
 gen standable-gui.in "$HOME/bin/standable-gui"; chmod +x "$HOME/bin/standable-gui"
+gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
 gen standable-gui.desktop.in "$HOME/Desktop/Standable GUI.desktop"
 chmod +x "$HOME/Desktop/Standable GUI.desktop" 2>/dev/null
 
