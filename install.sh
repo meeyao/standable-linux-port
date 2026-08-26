@@ -171,7 +171,7 @@ say "Proton     : $PROTON"
 [ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
 [ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing, game layout changed or incomplete install"
-for v in libdriver_ignition.so ignition_server.exe; do
+for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll; do
     [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing, incomplete checkout?"
 done
 
@@ -247,6 +247,8 @@ rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
 cp "$REPO/vendor/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
 bak "$GAME_DIR/bin/linux64/ignition_server.exe"
 cp "$REPO/vendor/ignition_server.exe" "$GAME_DIR/bin/linux64/"
+bak "$GAME_DIR/bin/linux64/ignition_bridge.dll"
+cp "$REPO/vendor/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
 
 # glibc compat check: warn early if the .so won't load on this system
 if command -v ldd >/dev/null 2>&1; then
