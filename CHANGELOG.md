@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.0.1
+
+- **Fix SteamVR crash on fresh installs**: the Windows driver
+  `driver_standable.dll` links against Valve's Steamworks runtime, but the
+  SteamVR runtimes don't provide `steam_api64.dll`. On setups that never had
+  another Steamworks title installed the Ignition server could not load the
+  driver, the IPC handshake never completed, and SteamVR aborted after a
+  ~21 s watchdog timeout and dropped into **safe mode**. The installer now
+  vendors and deploys the official `steam_api64.dll` (Steamworks SDK
+  redistributable) next to the shim, where Wine's DLL search path finds it.
+- **Doctor**: `./standable check` now verifies `steam_api64.dll` is deployed
+  and fails loudly when it isn't.
+- **Supply chain**: `vendor/steam_api64.dll` added to `SHA256SUMS`;
+  `BUILDING.md` documents its origin, hash and how to swap in your own copy.
+
 ## v3.0.0
 
 - **Vendor Ignition**: installer deploys `libdriver_ignition.so` and

@@ -122,13 +122,20 @@ if [ "${1:-}" = "--check" ]; then
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
     [ -x "$HOME/bin/standable-gui" ] && ok "~/bin/standable-gui installed" || bad "GUI launcher missing"
+    if detect_game_dir; then
+        [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] \
+            && ok "steam_api64.dll deployed (driver's Steamworks dep)" \
+            || bad "steam_api64.dll missing — re-run install, SteamVR crashes on driver load"
+    else
+        bad "game '$GAME_SUBDIR' not found in any Steam library"
+    fi
     N=$(pgrep -xc wineserver | tail -1); N=${N:-0}
     if [ "$N" = 0 ]; then ok "no wineservers (nothing running)"
     elif [ "$N" = 1 ]; then ok "single wineserver (GUI+driver shared)"
     else bad "$N wineservers running, IPC will be split!"; fi
     LOG="$STEAM_ROOT/logs/vrserver.txt"
     if [ -f "$LOG" ]; then
-        F=$(tail -n 300 "$LOG" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
+        F=$(tail -n 300 "$LOG" | grep -v "Failed to send message: SteamUser" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
         L=$(stat -c %Y "$LOG"); NOW=$(date +%s)
         if [ $((NOW-L)) -lt 3600 ] && [ "${F:-0}" != 0 ]; then
             warn "recent driver failures in vrserver.txt ($F), check TROUBLESHOOTING.md"
@@ -148,6 +155,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
+    rm -fv "$GAME_DIR/bin/linux64/steam_api64.dll"
     say "Restored files are next to the modified ones (*.bak-*). vrpath seeds and"
     say "the SteamPath registry key were left alone , see RESTORE.md to strip them."
     exit 0
@@ -176,7 +184,7 @@ say "Proton     : $PROTON"
 [ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
 [ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing, game layout changed or incomplete install"
-for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll; do
+for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll steam_api64.dll; do
     [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing, incomplete checkout?"
 done
 
@@ -256,6 +264,14 @@ bak "$GAME_DIR/bin/linux64/ignition_server.exe"
 cp "$REPO/vendor/ignition_server.exe" "$GAME_DIR/bin/linux64/"
 bak "$GAME_DIR/bin/linux64/ignition_bridge.dll"
 cp "$REPO/vendor/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
+
+# Steamworks runtime requirement of the Windows driver. driver_standable.dll
+# imports steam_api64.dll (SteamAPI_* init); without it ignition_server.exe
+# fails to load the driver, the handshake never completes and SteamVR aborts
+# with a ~21s watchdog timeout (safe-mode crash loop). bin/linux64 is the
+# Ignition server's working dir and is on Wine's DLL search path.
+bak "$GAME_DIR/bin/linux64/steam_api64.dll"
+cp "$REPO/vendor/steam_api64.dll" "$GAME_DIR/bin/linux64/"
 
 # glibc compat check: warn early if the .so won't load on this system
 if command -v ldd >/dev/null 2>&1; then
