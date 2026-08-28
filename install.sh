@@ -33,13 +33,13 @@ detect_game_dir() {
     # default library, then every library in libraryfolders.vdf
     local libs=("$STEAM_ROOT")
     if [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ]; then
-        while IFS= read -r p; do libs+=("$p"); done < <(
-            grep -oE '"path"\s+"[^"]+"' "$STEAM_ROOT/steamapps/libraryfolders.vdf" \
-                | sed 's/.*"\t*//; s/"$//' | sed 's/\\\\/\//g')
+        while IFS= read -r p; do
+            [ -n "$p" ] && libs+=("$p")
+        done < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
     fi
     for lib in "${libs[@]}"; do
         [ -d "$lib/steamapps/common/$GAME_SUBDIR" ] || continue
-        GAME_DIR="$lib/steamapps/common/$GAME_SUBDIR"; return 0
+        GAME_DIR="$lib/steamapps/common/$GAME_SUBDIR"; GAME_LIB="$lib"; return 0
     done
     return 1
 }
@@ -89,7 +89,12 @@ pick_proton() {
 }
 
 pick_prefix() {
-    COMPAT="$STEAM_ROOT/steamapps/compatdata/$APP_ID"
+    # the Proton prefix lives next to the game in its own Steam library
+    # (steamapps/compatdata/<APP_ID>), which for a secondary drive is NOT the
+    # default Steam root. Fall back to the default root if the game library
+    # hasn't been located yet (e.g. in --check before detect_game_dir runs).
+    local GIRO="${GAME_LIB:-$STEAM_ROOT}"
+    COMPAT="$GIRO/steamapps/compatdata/$APP_ID"
     PFX="$COMPAT/pfx"
 }
 
@@ -109,6 +114,11 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 # ================================================================== DOCTOR ==
 if [ "${1:-}" = "--check" ]; then
     detect_steam_root || die "Steam root not found"
+    if detect_game_dir; then
+        GAME_FOUND=1
+    else
+        GAME_FOUND=0
+    fi
     pick_prefix
     fail=0
     ok(){ say "OK  $1"; }
@@ -122,7 +132,7 @@ if [ "${1:-}" = "--check" ]; then
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
     [ -x "$HOME/bin/standable-gui" ] && ok "~/bin/standable-gui installed" || bad "GUI launcher missing"
-    if detect_game_dir; then
+    if [ "$GAME_FOUND" = 1 ]; then
         [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] \
             && ok "steam_api64.dll deployed (driver's Steamworks dep)" \
             || bad "steam_api64.dll missing — re-run install, SteamVR crashes on driver load"
@@ -223,12 +233,15 @@ STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" 
 # -- s: link -----------------------------------------------------------------
 # Valve Proton maps s: to the Steam parent (S:\steamapps\common\...) via
 # get_validated_steamapps_parent(). Other builds map s: to steamapps directly
-# (S:\common\...). Detect which by checking for the parent wrapper.
+# (S:\common\...). Detect which by checking for the parent wrapper. When the
+# game lives on a secondary library, s: is that library's root, not the
+# default Steam root.
+S_ROOT="${GAME_LIB:-$STEAM_ROOT}"
 PROTON_DIR_S="$(dirname "$PROTON")"
 if grep -q 'get_validated_steamapps_parent' "$PROTON_DIR_S/proton" 2>/dev/null; then
-    S_TARGET="$STEAM_ROOT"
+    S_TARGET="$S_ROOT"
 else
-    S_TARGET="$STEAM_ROOT/steamapps"
+    S_TARGET="$S_ROOT/steamapps"
 fi
 ln -sfn "$S_TARGET" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
 

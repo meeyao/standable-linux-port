@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.0.2
+
+- **Install on any Steam library**: when the game lives on a secondary drive
+  (e.g. a shared dual-boot drive mounted under `/mnt`), the installer now finds
+  it via `libraryfolders.vdf`, derives the Proton prefix from that drive's
+  `steamapps/compatdata/<APP_ID>` (not the default Steam root), and points the
+  `s:` drive at the correct library. This also fixes a pre-existing bug where
+  the secondary-library paths in `libraryfolders.vdf` were never parsed, so
+  off-root installs were silently ignored.
+
 ## v3.0.1
 
 - **Fix SteamVR crash on fresh installs**: the Windows driver
