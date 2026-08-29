@@ -21,7 +21,9 @@ cd vendor && sha256sum -c SHA256SUMS
 
 Download the official `Ignition-Linux-Windows.zip` from the
 [Ignition v1.0.0 release](https://github.com/BnuuySolutions/Ignition/releases/tag/v1.0.0)
-and replace both files in `vendor/`. Their hashes:
+and, for each file below, replace its counterpart in `vendor/`. The shim
+(`libdriver_ignition.so`), server (`ignition_server.exe`) and IPC bridge
+(`ignition_bridge.dll`) all come from that zip. Official release hashes:
 
 ```
 26d2c1bc3eb59309f398335a22a5096543b6b7cee508767665ccde70faa33cf7  libdriver_ignition.so
@@ -29,7 +31,9 @@ and replace both files in `vendor/`. Their hashes:
 ```
 
 (The shipped files were built from upstream commit `bbb7a70b`, one commit
-after v1.0.0, so they differ only by that rebuild.)
+after v1.0.0, so they differ only by that rebuild. The `ignition_bridge.dll`
+shipped here matches the same build; swap in the release copy and re-run
+`./install.sh` either way.)
 
 ## 3. Build from source
 

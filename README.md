@@ -32,7 +32,13 @@ Then:
 ```
 
 Sliders apply in realtime and T-pose calibration works. The installer also
-creates a "Standable GUI" desktop entry if you prefer clicking.
+creates a "Standable GUI" desktop entry if you prefer clicking — complete
+with the game's own icon, copied to `~/.local/share/icons/` so it survives
+game updates or moves.
+
+The game can live on any Steam library (including a secondary/dual-boot drive
+mounted outside the default Steam root); the installer finds it via
+`libraryfolders.vdf` and sets up the Proton prefix and `s:` drive to match.
 
 ## Compatibility
 
