@@ -55,10 +55,10 @@ After swapping either 2 or 3 in, re-run `./install.sh`.
 
 Standable's Windows driver (`driver_standable.dll`) links against the
 Steamworks runtime and will **not load without `steam_api64.dll` on the DLL
-search path**. Installer regression 1b7c3cd-era setups used to ship without it;
-missing it made `ignition_server.exe` fail to load the driver, the IPC
-handshake never completed, and SteamVR aborted with a ~21 s watchdog timeout
-(safe-mode crash loop). This file fixes that.
+search path**. Older releases of this installer shipped without it; missing it
+made `ignition_server.exe` fail to load the driver, the IPC handshake never
+completed, and SteamVR aborted with a ~21 s watchdog timeout (safe-mode crash
+loop). This file fixes that.
 
 It is Valve's official `steam_api64.dll` from the Steamworks SDK
 `redistributable_bin/win64`, a standard redistribution that ships with every
