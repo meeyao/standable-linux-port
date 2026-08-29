@@ -163,6 +163,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     pick_prefix
     say "Removing port artifacts…"
     rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+    rm -fv "$HOME/.local/share/icons/standable.png"
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
     rm -fv "$GAME_DIR/bin/linux64/steam_api64.dll"
@@ -297,6 +298,17 @@ if command -v ldd >/dev/null 2>&1; then
 fi
 
 say "Installing launchers…"
+# Desktop icon: copy the game's wave icon to the standard icons dir so the
+# desktop entry resolves regardless of game updates/moves.
+ICON_SRC="$GAME_DIR/resources/icons/stndbl_wave@2x.png"
+ICON_DST="$HOME/.local/share/icons/standable.png"
+if [ -f "$ICON_SRC" ]; then
+    mkdir -p "$(dirname "$ICON_DST")"
+    bak "$ICON_DST"
+    cp "$ICON_SRC" "$ICON_DST"
+else
+    warn "icon not found: $ICON_SRC (desktop entry will fall back to generic)"
+fi
 gen() { # gen <template> <dest>
     sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
         -e "s|@PROTON@|$PROTON|g"       -e "s|@STEAMVR@|$STEAMVR|g" \
