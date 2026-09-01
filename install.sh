@@ -98,6 +98,58 @@ pick_prefix() {
     PFX="$COMPAT/pfx"
 }
 
+# ------------------------------------------------------------- VRChat link ---
+# Standable's auto-calibration ("VRChat" / "OSC" feature) works by having
+# driver_standable.dll read VRChat's IK-debug log from
+#   %UserProfile%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt
+# (it regex-parses "Changed player height ... tracking scale ..." and
+# "eyeToNeck:(...) scaled:(...)" lines; confirmed against the driver's
+# WS2_32/ExpandEnvironmentStringsW/FindFirstFileW imports and the UTF-16 path
+# string near the AutoCalibration region). VRChat runs in its OWN Proton prefix
+# (AppID 438100), so inside the Standable prefix that path is empty. We symlink
+# VRChat's LocalLow data into the Standable prefix so the driver can see
+# VRChat's live IK log.
+VRC_APP_ID=438100
+detect_vrchat_prefix() {
+    # locate VRChat's Proton prefix across all Steam libraries (any drive).
+    local libs=("$STEAM_ROOT")
+    [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ] && {
+        while IFS= read -r p; do
+            [ -n "$p" ] && libs+=("$p")
+        done < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
+    }
+    VRC_COMPAT=""
+    local lib
+    for lib in "${libs[@]}"; do
+        if [ -d "$lib/steamapps/compatdata/$VRC_APP_ID" ]; then
+            VRC_COMPAT="$lib/steamapps/compatdata/$VRC_APP_ID"; return 0
+        fi
+    done
+    return 1
+}
+
+# host path of VRChat's LocalLow data (empty if not installed / prefix not made)
+vrchat_low() {
+    [ -n "${VRC_COMPAT:-}" ] || return 0
+    printf '%s/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat' "$VRC_COMPAT"
+}
+
+setup_vrchat_link() {
+    local src; src="$(vrchat_low)"
+    local dst="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
+    if [ -z "$src" ] || [ ! -d "$src" ]; then
+        return 0    # nothing to link yet
+    fi
+    # Don't clobber a real directory someone created deliberately.
+    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+        warn "Leaving $dst alone (real dir/link); remove it to let the port manage it"
+        return 0
+    fi
+    mkdir -p "$(dirname "$dst")"
+    ln -sfn "$src" "$dst"
+    say "Linked VRChat LocalLow into Standable prefix for auto-calibration."
+}
+
 # ------------------------------------------------------------------- checks --
 require() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed."; }
 
@@ -120,6 +172,7 @@ if [ "${1:-}" = "--check" ]; then
         GAME_FOUND=0
     fi
     pick_prefix
+    detect_vrchat_prefix || true
     fail=0
     ok(){ say "OK  $1"; }
     bad(){ warn "FAIL $1"; fail=1; }
@@ -129,6 +182,17 @@ if [ "${1:-}" = "--check" ]; then
     [ -f "$VRPATH" ] && ok "vrpathreg stub present" || bad "vrpathreg stub missing"
     grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null && ok "SteamPath registry set" || bad "SteamPath registry missing"
     [ -L "$PFX/dosdevices/s:" ] && ok "s: dosdevice link alive" || bad "s: link missing (recreated on next launch)"
+    if [ -n "${VRC_COMPAT:-}" ]; then
+        VRCLOW="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
+        SRCLOW="$(vrchat_low)"
+        if [ -L "$VRCLOW" ] && [ -d "$SRCLOW" ]; then
+            ok "VRChat LocalLow linked into Standable prefix (auto-calibration log)"
+        else
+            bad "VRChat log link missing — run install to enable auto-calibration"
+        fi
+    else
+        warn "VRChat not found — auto-calibration requires it to be installed"
+    fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
     [ -x "$HOME/bin/standable-gui" ] && ok "~/bin/standable-gui installed" || bad "GUI launcher missing"
@@ -166,6 +230,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -fv "$HOME/.local/share/icons/standable.png"
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
+    rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
     rm -fv "$GAME_DIR/bin/linux64/steam_api64.dll"
     say "Restored files are next to the modified ones (*.bak-*). vrpath seeds and"
     say "the SteamPath registry key were left alone , see RESTORE.md to strip them."
@@ -184,6 +249,7 @@ detect_steam_root || {
 detect_game_dir   || die "game '$GAME_SUBDIR' not found in any Steam library"
 pick_proton
 pick_prefix
+detect_vrchat_prefix || warn "VRChat not found in any Steam library — auto-calibration link will be skipped"
 STEAMVR="$STEAM_ROOT/steamapps/common/SteamVR"
 WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
 
@@ -191,6 +257,7 @@ say "Steam root : $STEAM_ROOT"
 say "Game       : $GAME_DIR"
 say "Prefix     : $COMPAT (pfx: $PFX)"
 say "Proton     : $PROTON"
+if [ -n "${VRC_COMPAT:-}" ]; then say "VRChat pfx : $VRC_COMPAT"; fi
 
 [ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
@@ -223,6 +290,12 @@ PC="$PROTON"; PC="${PC%/proton}/files/lib/wine/x86_64-windows"
 ls "$PC"/vrclient*.dll >/dev/null 2>&1 || die "vrclient dlls not found at $PC"
 bak "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
 cp "$PC"/vrclient*.dll "$PFX/drive_c/vrclient/bin/"
+
+# -- VRChat LocalLow link (auto-calibration) ---------------------------------
+# The driver reads VRChat's IK-debug log from %UserProfile%\AppData\LocalLow\VRChat\VRChat\
+# inside ITS OWN prefix; VRChat runs in a separate prefix (438100), so we link
+# VRChat's data in. Also cached for the per-launch repair loops (@VRCHAT_VRC_DIR@).
+setup_vrchat_link
 
 # -- registry ----------------------------------------------------------------
 say "Setting SteamPath registry (HKCU\\Software\\Valve\\Steam)…"
@@ -313,6 +386,7 @@ gen() { # gen <template> <dest>
     sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
         -e "s|@PROTON@|$PROTON|g"       -e "s|@STEAMVR@|$STEAMVR|g" \
         -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@HOME@|$HOME|g" \
+        -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
         "$REPO/templates/$1" > "$2"
 }
 mkdir -p "$HOME/bin"

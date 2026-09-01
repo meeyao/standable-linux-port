@@ -28,10 +28,25 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
+# Auto-calibration: driver reads VRChat's IK log from
+# %UserProfile%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt in its own
+# prefix; VRChat lives in a separate prefix (438100), so we link the two.
+# Re-applied here because Proton prefix init can recreate LocalLow (wiping the
+# link). No-op when VRChat isn't installed.
+fix_vrchat() {
+    local src="@VRCHAT_VRC_DIR@"
+    [ -n "$src" ] && [ -d "$src" ] || return 0
+    local dst="$STEAM_COMPAT_DATA_PATH/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat"
+    [ -e "$dst" ] && [ ! -L "$dst" ] && return 0   # don't clobber real dir
+    mkdir -p "$(dirname "$dst")"
+    ln -sfn "$src" "$dst"
+}
+
 # PSVR2 Sense controller support (Ignition) — proton run, may wipe s:
 "$PROTON" run reg import ./wine_psvr2_hidraw.reg >/dev/null 2>&1 &
 
 fix_s
-( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; done ) &
+fix_vrchat
+( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
 exec "$PROTON" run "$@"
