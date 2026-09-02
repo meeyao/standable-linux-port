@@ -68,6 +68,12 @@ SDK 1.60 release:
 1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc  steam_api64.dll   # = Steamworks SDK 1.60
 ```
 
+Origin: the copy in `vendor/` was taken from the Steam game **TaskbarHero**
+(`steamapps/common/TaskbarHero/TaskBarHero_Data/Plugins/x86_64/steam_api64.dll`),
+which ships it as part of its Steamworks integration — a genuine Valve build
+delivered via Valve's CDN. The same file is present, byte-identical, in every
+Steamworks game and in the Steamworks SDK's `redistributable_bin/win64`.
+
 The game's own `bin/win64/steam_api64.dll`, when present, is the **Steamworks
 SDK 1.61** build — a newer but ABI-compatible release. Either works; the
 vendored 1.60 copy is the default so installs are reproducible.
