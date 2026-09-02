@@ -299,12 +299,58 @@ find_proton_builds() {
     done
 }
 
+# steam_forced_proton — read the compat tool Steam has forced on the game's
+# appid from config.vdf (CompatToolMapping). Returns the Proton binary path or
+# empty. Steam stores the tool *name* (e.g. "proton-cachyos-slr"); resolve it
+# to a compatibilitytools.d/ install or a built-in Proton path.
+steam_forced_proton() {
+    local vdf="$STEAM_ROOT/config/config.vdf"
+    [ -f "$vdf" ] || return 1
+    local name
+    name=$(python3 - "$vdf" "$APP_ID" <<'PY'
+import json, re, sys
+try:
+    s = open(sys.argv[1]).read()
+except Exception:
+    raise SystemExit(1)
+m = re.search(r'"CompatToolMapping"\s*\{(.*?)\n\}', s, re.S)
+if not m:
+    raise SystemExit(1)
+for app in re.finditer(r'"(\d+)"\s*\{(.*?)\n\t\t\}', m.group(1), re.S):
+    if app.group(1) == sys.argv[2]:
+        n = re.search(r'"name"\s+"([^"]+)"', app.group(2))
+        if n:
+            print(n.group(1)); raise SystemExit(0)
+raise SystemExit(1)
+PY
+) || return 1
+    [ -n "$name" ] || return 1
+    # custom tool in compatibilitytools.d (per-user or system), or built-in Proton
+    for d in "$STEAM_ROOT/compatibilitytools.d/$name/proton" \
+             "/usr/share/steam/compatibilitytools.d/$name/proton"; do
+        [ -x "$d" ] && { echo "$d"; return 0; }
+    done
+    for p in "$STEAM_ROOT/steamapps/common/$name/proton" \
+             "$STEAM_ROOT/steamapps/common/Proton - $name/proton"; do
+        [ -x "$p" ] && { echo "$p"; return 0; }
+    done
+    return 1
+}
+
 pick_proton() {
     if [ -n "$PROTON_OVERRIDE" ] && [ "$PROTON_OVERRIDE" != "PENDING" ]; then
         # accept directory (append /proton) or path to proton binary
         [ -d "$PROTON_OVERRIDE" ] && [ -x "$PROTON_OVERRIDE/proton" ] && PROTON_OVERRIDE="$PROTON_OVERRIDE/proton"
         [ -x "$PROTON_OVERRIDE" ] || die "--proton: not executable: $PROTON_OVERRIDE"
         PROTON="$PROTON_OVERRIDE"; return 0
+    fi
+    # Use whatever Proton Steam has forced on the game, so driver and game can't
+    # mismatch (the crash we fixed). Only checked if no install exists yet.
+    local forced
+    forced=$(steam_forced_proton)
+    if [ -n "$forced" ]; then
+        say "using Steam-forced Proton for $APP_ID: $(basename "$(dirname "$forced")")"
+        PROTON="$forced"; return 0
     fi
     # Preserve the existing proton choice if the scripts already work.
     # Silently switching builds breaks gamedrive conventions and s: links.
