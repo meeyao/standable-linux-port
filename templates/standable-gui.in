@@ -19,11 +19,36 @@ S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # matters.
 PROTON_DIR="$(dirname "$PROTON")"
 if grep -q 'get_validated_steamapps_parent' "$PROTON_DIR/proton" 2>/dev/null; then
-    S_TARGET="@STEAM_ROOT@"
+    S_TARGET="@S_ROOT@"
 else
-    S_TARGET="@STEAM_ROOT@/steamapps"
+    S_TARGET="@S_ROOT@/steamapps"
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
+
+# Fix SteamVR state before launching: a transient handshake timeout can leave
+# the driver disabled or SteamVR in safe mode — neither is permanent, but both
+# prevent standable from loading next launch. Clear both flags so the driver
+# gets a fresh chance each session.
+fix_steamvr_state() {
+    local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
+    [ -f "$cfg" ] || return 0
+    python3 - "$cfg" <<'PY' >/dev/null 2>&1 || return 0
+import json, sys
+cfg = sys.argv[1]
+d = json.load(open(cfg))
+changed = False
+# Re-enable the standable driver if SteamVR auto-disabled it
+if d.get("driver_standable", {}).get("enable", True) is False:
+    d["driver_standable"]["enable"] = True
+    changed = True
+# Exit safe mode (standable is NOT on the whitelist, so safe mode = no driver)
+if d.get("steamvr", {}).get("enableSafeMode", False) is True:
+    d["steamvr"]["enableSafeMode"] = False
+    changed = True
+if changed:
+    json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
+PY
+}
 
 # Auto-calibration: driver reads VRChat's IK log from
 # %UserProfile%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt in its own
@@ -43,6 +68,7 @@ cd "@GAME_DIR@" || exit 1
 
 fix_s
 fix_vrchat
+reenable_driver
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
 exec "$PROTON" run ./Standable.exe

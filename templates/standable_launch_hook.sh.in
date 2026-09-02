@@ -1,0 +1,56 @@
+#!/bin/bash
+# Standable launch hook — set as Steam launch options:
+#   bash ~/bin/standable_launch_hook.sh %command%
+#
+# Creates/repairs symlinks that Proton prefix maintenance wipes on every
+# proton run, then hands off to Steam's normal launch (%command%).
+# Steam tracks the game natively; hours / overlay / etc. all work normally.
+#
+# ALTERNATIVE: use ~/bin/standable-gui directly (runs the full wrapper).
+# This hook is for when you want Steam to own the launch.
+#
+# NOTE: s: convention is baked at install time from the Proton the installer
+# picked. %command% expands to the game exe (not the proton binary), so we
+# never try to re-detect it at runtime here.
+
+STEAM_COMPAT_DATA_PATH="@COMPAT@"
+STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
+export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH
+
+PFX="$STEAM_COMPAT_DATA_PATH/pfx"
+S_LINK="$PFX/dosdevices/s:"
+S_TARGET="@S_TARGET@"
+fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
+
+fix_vrchat() {
+    local src="@VRCHAT_VRC_DIR@"
+    [ -n "$src" ] && [ -d "$src" ] || return 0
+    local dst="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
+    [ -e "$dst" ] && [ ! -L "$dst" ] && return 0
+    mkdir -p "$(dirname "$dst")"
+    ln -sfn "$src" "$dst"
+}
+
+# SteamVR persistently disables drivers that fail/abort at load ("Not loading
+# driver X because it is disabled in settings"). Re-enable ours BEFORE SteamVR
+# starts so a transient handshake timeout doesn't strand the driver between
+# sessions. Only touches the flag when it is currently false.
+reenable_driver() {
+    local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
+    [ -f "$cfg" ] || return 0
+    python3 - "$cfg" <<'PY' >/dev/null 2>&1 || return 0
+import json, sys
+cfg = sys.argv[1]
+d = json.load(open(cfg))
+if d.get("driver_standable", {}).get("enable", True) is False:
+    d["driver_standable"]["enable"] = True
+    json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
+PY
+}
+
+fix_s
+fix_vrchat
+reenable_driver
+( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
+
+exec "$@"

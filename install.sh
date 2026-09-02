@@ -168,11 +168,19 @@ if [ "${1:-}" = "--check" ]; then
     detect_steam_root || die "Steam root not found"
     if detect_game_dir; then
         GAME_FOUND=1
+        S_ROOT="${GAME_LIB:-$STEAM_ROOT}"
     else
         GAME_FOUND=0
+        S_ROOT="$STEAM_ROOT"
     fi
     pick_prefix
     detect_vrchat_prefix || true
+    PROTON=""
+    for f in "$GAME_DIR/bin/linux64/launch_serverhelper.sh" "$HOME/bin/standable-gui"; do
+        [ -f "$f" ] || continue
+        PROTON=$(grep '^PROTON=' "$f" 2>/dev/null | head -1 | sed 's/^PROTON="//;s/"$//;s/^PROTON=//')
+        [ -n "$PROTON" ] && [ -f "$PROTON" ] && break
+    done
     fail=0
     ok(){ say "OK  $1"; }
     bad(){ warn "FAIL $1"; fail=1; }
@@ -182,6 +190,51 @@ if [ "${1:-}" = "--check" ]; then
     [ -f "$VRPATH" ] && ok "vrpathreg stub present" || bad "vrpathreg stub missing"
     grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null && ok "SteamPath registry set" || bad "SteamPath registry missing"
     [ -L "$PFX/dosdevices/s:" ] && ok "s: dosdevice link alive" || bad "s: link missing (recreated on next launch)"
+    # s: must point at the LIBRARY that holds the game (secondary libraries need
+    # S_ROOT, not the default Steam root); a wrong target breaks the driver's
+    # CWD->s: mapping and makes the handshake fail -> SteamVR disables the driver.
+    if [ -L "$PFX/dosdevices/s:" ]; then
+        STGT="$S_ROOT"
+        if [ -n "$PROTON" ] && [ -f "$PROTON" ] \
+           && ! grep -q 'get_validated_steamapps_parent' "$(dirname "$PROTON")/proton" 2>/dev/null; then
+            STGT="$S_ROOT/steamapps"
+        fi
+        SLINK_TGT="$(readlink "$PFX/dosdevices/s:")"
+        if [ "$SLINK_TGT" = "$STGT" ]; then
+            ok "s: maps to game library ($STGT)"
+        else
+            warn "s: maps to '$SLINK_TGT' but game library is '$STGT' (fix with install.sh)"
+            fail=1
+        fi
+    fi
+    # SteamVR persistently disables drivers that fail/abort at load ("Not loading
+    # driver X because it is disabled in settings"). Look for that flag so users
+    # aren't stuck in a re-enable/disable loop.
+    CFG="$STEAM_ROOT/config/steamvr.vrsettings"
+    if grep -q '"driver_standable"' "$CFG" 2>/dev/null; then
+        if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("driver_standable",{}).get("enable",True) is False else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
+            bad "SteamVR has disabled the standable driver (re-enable via install.sh or Settings/Developer)"
+        else
+            ok "standable driver not disabled in SteamVR settings"
+        fi
+    else
+        ok "standable driver not disabled in SteamVR settings"
+    fi
+    # SteamVR safe mode loads only the whitelist (safe_mode_driver_whitelist.json);
+    # standable is NOT on it, so a safe-mode session will silently skip the driver.
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("steamvr",{}).get("enableSafeMode",False) else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
+        warn "SteamVR SAFE MODE is on — standable is not whitelisted and won't load (clear safe mode in SteamVR Settings)"
+        fail=1
+    else
+        ok "SteamVR safe mode off"
+    fi
+    # Linux SteamVR 307: "A key component of SteamVR isn't working" often
+    # relates to enableLinuxVulkanAsync on Wayland compositors.
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("steamvr",{}).get("enableLinuxVulkanAsync",False) else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
+        warn "enableLinuxVulkanAsync is on in steamvr.vrsettings — known cause of SteamVR 307 on Wayland (set false or use X11 session)"
+    else
+        ok "enableLinuxVulkanAsync off"
+    fi
     if [ -n "${VRC_COMPAT:-}" ]; then
         VRCLOW="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
         SRCLOW="$(vrchat_low)"
@@ -196,6 +249,7 @@ if [ "${1:-}" = "--check" ]; then
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
     [ -x "$HOME/bin/standable-gui" ] && ok "~/bin/standable-gui installed" || bad "GUI launcher missing"
+    [ -x "$HOME/bin/standable_launch_hook.sh" ] && ok "~/bin/standable_launch_hook.sh installed" || bad "Steam launch hook missing"
     if [ "$GAME_FOUND" = 1 ]; then
         [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] \
             && ok "steam_api64.dll deployed (driver's Steamworks dep)" \
@@ -216,6 +270,16 @@ if [ "${1:-}" = "--check" ]; then
         else
             ok "vrserver.txt clean of known failure patterns"
         fi
+        # SteamVR error 307: "A key component of SteamVR isn't working" —
+        # a vrcompositor/vulkan startup failure. Pull the smoking-gun lines.
+        # NB: avoid matching "307" inside microsecond timestamps.
+        if tail -n 400 "$LOG" | grep -aqE "Error.*\b307\b|vrcompositor.*(crash|segfault)|Failed to (connect|load|init).*compositor|enableLinuxVulkanAsync|Vulkan.*(failed|error)"; then
+            G=$(tail -n 400 "$LOG" | grep -aiE "\b307\b|vrcompositor|enableLinuxVulkanAsync|Vulkan" | tail -5)
+            warn "possible SteamVR 307 (compositor) failure in vrserver.txt:"
+            echo "$G" | sed 's/^/        /'
+        else
+            ok "no SteamVR 307 / compositor failure signature in vrserver.txt"
+        fi
     fi
     exit $fail
 fi
@@ -226,7 +290,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     detect_game_dir || die "game not found"
     pick_prefix
     say "Removing port artifacts…"
-    rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
     rm -fv "$HOME/.local/share/icons/standable.png"
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
@@ -262,7 +326,7 @@ if [ -n "${VRC_COMPAT:-}" ]; then say "VRChat pfx : $VRC_COMPAT"; fi
 [ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
 [ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing, game layout changed or incomplete install"
-for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll steam_api64.dll; do
+for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll; do
     [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing, incomplete checkout?"
 done
 
@@ -357,8 +421,10 @@ cp "$REPO/vendor/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
 # fails to load the driver, the handshake never completes and SteamVR aborts
 # with a ~21s watchdog timeout (safe-mode crash loop). bin/linux64 is the
 # Ignition server's working dir and is on Wine's DLL search path.
+# Use the DLL shipped with the game (bin/win64/) — it matches the SDK version
+# the driver was compiled against; avoids a vendored copy mismatch.
 bak "$GAME_DIR/bin/linux64/steam_api64.dll"
-cp "$REPO/vendor/steam_api64.dll" "$GAME_DIR/bin/linux64/"
+cp "$GAME_DIR/bin/win64/steam_api64.dll" "$GAME_DIR/bin/linux64/"
 
 # glibc compat check: warn early if the .so won't load on this system
 if command -v ldd >/dev/null 2>&1; then
@@ -383,9 +449,11 @@ else
     warn "icon not found: $ICON_SRC (desktop entry will fall back to generic)"
 fi
 gen() { # gen <template> <dest>
+    S_TARGET="${S_TARGET:-$S_ROOT}"
     sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
         -e "s|@PROTON@|$PROTON|g"       -e "s|@STEAMVR@|$STEAMVR|g" \
-        -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@HOME@|$HOME|g" \
+        -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@S_ROOT@|$S_ROOT|g" -e "s|@S_TARGET@|$S_TARGET|g" \
+        -e "s|@HOME@|$HOME|g" \
         -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
         "$REPO/templates/$1" > "$2"
 }
@@ -398,17 +466,23 @@ gen standable-gui.in "$HOME/bin/standable-gui"; chmod +x "$HOME/bin/standable-gu
 gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
 gen standable-gui.desktop.in "$HOME/Desktop/Standable GUI.desktop"
 chmod +x "$HOME/Desktop/Standable GUI.desktop" 2>/dev/null
+bak "$HOME/bin/standable_launch_hook.sh"
+gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
+chmod +x "$HOME/bin/standable_launch_hook.sh"
 
 say "Done."
 cat <<EOF
 
-  Next steps
-    1. In Steam: ensure the game uses '$(basename "$PROTON" | sed 's/^proton-//')'
-       as its compatibility tool (Settings → Compatibility), or just never
-       launch it from Steam. (Proton in use: $(basename "$(dirname "$PROTON")"))
-    2. Start SteamVR.
-    3. Run ./standable gui (or use the "Standable GUI" desktop entry).
+  Next steps — two ways to launch
+    A) Via Steam (hours tracking, overlay, friends):
+       Right-click Standable → Properties → Launch Options, set:
+         bash $HOME/bin/standable_launch_hook.sh %command%
+       Then click Play normally.
 
+    B) Via the custom GUI (identical, but standalone):
+       Run ./standable gui (or use the "Standable GUI" desktop entry).
+
+  Either way, start SteamVR first.
   Verify anytime with:  $REPO/install.sh --check
   Problems?             See TROUBLESHOOTING.md in the repo.
 EOF
