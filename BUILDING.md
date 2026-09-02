@@ -60,15 +60,21 @@ made `ignition_server.exe` fail to load the driver, the IPC handshake never
 completed, and SteamVR aborted with a ~21 s watchdog timeout (safe-mode crash
 loop). This file fixes that.
 
-It is Valve's official `steam_api64.dll` from the Steamworks SDK
-`redistributable_bin/win64`, a standard redistribution that ships with every
-Steamworks game. The shipped copy is a Windows x64 PE (build path
-`steam_rel_client_win64\...\steam_api64.pdb`) exporting the four entry points
-the driver imports, including `SteamInternal_SteamAPI_Init`. If you want to
-swap in the copy from your own Steamworks SDK download, do so and update
-`vendor/SHA256SUMS`; any recent SDK release exports the same functions. Its
-hash:
+It is Valve's official `steam_api64.dll` from the **Steamworks SDK 1.60**
+(`redistributable_bin/win64`), verified byte-for-byte by SHA-256 against the
+SDK 1.60 release:
 
 ```
-1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc  steam_api64.dll
+1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc  steam_api64.dll   # = Steamworks SDK 1.60
 ```
+
+The game's own `bin/win64/steam_api64.dll`, when present, is the **Steamworks
+SDK 1.61** build — a newer but ABI-compatible release. Either works; the
+vendored 1.60 copy is the default so installs are reproducible.
+
+To verify or replace it, download the official Steamworks SDK from the
+[Steamworks partner site](https://partner.steamgames.com/doc/sdk) and take
+`redistributable_bin/win64/steam_api64.dll`; update `vendor/SHA256SUMS` after
+swapping. Any SDK 1.60+ release exports the same functions the driver imports
+(`SteamInternal_SteamAPI_Init`, `SteamInternal_ContextInit`,
+`SteamInternal_FindOrCreateUserInterface`, `SteamAPI_GetHSteamUser`).

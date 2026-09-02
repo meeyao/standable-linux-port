@@ -246,64 +246,18 @@ resolve_reg() {
     [ -f "$IGN_PSVR2_REG" ] || die "wine_psvr2_hidraw.reg missing ($IGN_PSVR2_REG)"
 }
 
-# Steamworks SDK mirror URLs for steam_api64.dll. Valve's official
-# ValveSoftware/steamworks_sdk repo is gone; the SDK is otherwise only
-# downloadable from the Steamworks partner portal (login required). These are
-# faithful public mirrors of the SDK's redistributable_bin/win64/steam_api64.dll.
-STEAM_API64_MIRRORS="
-https://raw.githubusercontent.com/rlabrecque/SteamworksSDK/master/redistributable_bin/win64/steam_api64.dll
-https://raw.githubusercontent.com/ceifa/steamworks.js/main/sdk/redistributable_bin/win64/steam_api64.dll
-"
-# Exports the Windows driver imports (steam_api64.dll must provide these).
-STEAM_API64_NEEDED="SteamInternal_SteamAPI_Init SteamInternal_FindOrCreateUserInterface SteamInternal_ContextInit SteamAPI_GetHSteamUser"
-
-# fetch_steam_api64 — download the Steamworks redistributable from a public
-# mirror into ~/.cache/standable-ignition/ and verify it's a PE exporting the
-# four entry points the driver needs. Prints the cached path on success,
-# empty string on any failure (caller falls back to vendored).
-fetch_steam_api64() {
-    local cache="$HOME/.cache/standable-ignition/steam_api64.dll"
-    if [ -s "$cache" ] && verify_steam_api64 "$cache"; then
-        echo "$cache"; return 0
-    fi
-    local url need_ok=0
-    for url in $STEAM_API64_MIRRORS; do
-        _log "Fetching steam_api64.dll from Steamworks SDK mirror: $url"
-        curl -fsSL --max-time 90 "$url" -o "$cache" 2>/dev/null || continue
-        if verify_steam_api64 "$cache"; then need_ok=1; break; fi
-        rm -f "$cache"
-    done
-    if [ "$need_ok" = 1 ]; then echo "$cache"; else echo ""; fi
-}
-
-# verify_steam_api64 — cheap sanity check: MZ header + the four exported names
-# present as ASCII strings in the DLL (export names are stored verbatim).
-verify_steam_api64() {
-    [ -f "$1" ] || return 1
-    [ "$(head -c 2 "$1")" = "MZ" ] || return 1
-    local name
-    for name in $STEAM_API64_NEEDED; do
-        grep -aq "$name" "$1" || return 1
-    done
-    return 0
-}
-
 # resolve_steam_api64 — pick the source for steam_api64.dll (the driver's
-# Steamworks runtime). Order: game's own build (if a game update ships one),
-# freshly fetched SDK mirror build, vendored copy as last resort.
+# Steamworks runtime). Use the game's own build if it ships one, else the
+# vendored copy (a known-good Valve Steamworks redistributable). No runtime
+# download: a fetched mirror build proved unreliable in real sessions.
 SA64_SRC=""
 resolve_steam_api64() {
     if [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
         SA64_SRC="$GAME_DIR/bin/win64/steam_api64.dll"
         say "using game's own steam_api64.dll"
     else
-        SA64_SRC="$(fetch_steam_api64)"
-        if [ -n "$SA64_SRC" ]; then
-            say "using Steamworks SDK steam_api64.dll"
-        else
-            say "offline/fetch failed — using vendored steam_api64.dll"
-            SA64_SRC="$REPO/vendor/steam_api64.dll"
-        fi
+        SA64_SRC="$REPO/vendor/steam_api64.dll"
+        say "using vendored steam_api64.dll"
     fi
     [ -f "$SA64_SRC" ] || die "steam_api64.dll source missing ($SA64_SRC)"
 }
