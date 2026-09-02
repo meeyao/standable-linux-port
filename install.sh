@@ -246,54 +246,18 @@ resolve_reg() {
     [ -f "$IGN_PSVR2_REG" ] || die "wine_psvr2_hidraw.reg missing ($IGN_PSVR2_REG)"
 }
 
-# Steamworks SDK 1.60 redistributable (steam_api64.dll) — pinned release, not a
-# moving branch. Verified byte-for-byte against the official SDK 1.60 build:
-# SHA-256 1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc.
-# Valve's own SDK is partner-login-gated, so this is a faithful mirror of the
-# exact 1.60 tag; the hash check is what makes it trustworthy, not the URL.
-STEAM_API64_URL="https://raw.githubusercontent.com/UlyssesZh/steamworks-sdk/v1.60/redistributable_bin/win64/steam_api64.dll"
-STEAM_API64_SHA256="1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc"
-STEAM_API64_CACHE="$HOME/.cache/standable-ignition/steam_api64.dll"
-
-# fetch_steam_api64 — download the pinned Steamworks SDK 1.60 build and verify
-# its SHA-256. Prints the path on success, empty string on any failure (caller
-# falls back to vendored). Cached so offline re-runs still work.
-fetch_steam_api64() {
-    if [ -s "$STEAM_API64_CACHE" ] \
-       && [ "$(sha256sum "$STEAM_API64_CACHE" | awk '{print $1}')" = "$STEAM_API64_SHA256" ]; then
-        echo "$STEAM_API64_CACHE"; return 0
-    fi
-    # status goes to the log, not stdout (the return value is captured)
-    _log "Fetching Steamworks SDK 1.60 steam_api64.dll…"
-    mkdir -p "$(dirname "$STEAM_API64_CACHE")"
-    tmp=$(mktemp)
-    if curl -fsSL --max-time 90 "$STEAM_API64_URL" -o "$tmp" 2>/dev/null \
-       && [ "$(sha256sum "$tmp" | awk '{print $1}')" = "$STEAM_API64_SHA256" ]; then
-        mv "$tmp" "$STEAM_API64_CACHE"
-        echo "$STEAM_API64_CACHE"
-    else
-        rm -f "$tmp"
-        warn "steam_api64.dll download failed or hash mismatch — using vendored copy"
-        echo ""
-    fi
-}
-
 # resolve_steam_api64 — pick the source for steam_api64.dll (the driver's
-# Steamworks runtime). Order: game's own build, then the pinned Steamworks SDK
-# 1.60 build fetched and hash-verified at install time, then the vendored copy
-# (offline fallback).
+# Steamworks runtime). Use the game's own build if it ships one, else the
+# vendored copy — which is the Steamworks SDK 1.60 redistributable (SHA-256
+# 1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc), same file
+# every Steamworks game ships. No runtime download needed.
 SA64_SRC=""
 resolve_steam_api64() {
     if [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
         SA64_SRC="$GAME_DIR/bin/win64/steam_api64.dll"
         say "using game's own steam_api64.dll"
     else
-        SA64_SRC="$(fetch_steam_api64)"
-        if [ -n "$SA64_SRC" ]; then
-            say "using Steamworks SDK 1.60 steam_api64.dll"
-        else
-            SA64_SRC="$REPO/vendor/steam_api64.dll"
-        fi
+        SA64_SRC="$REPO/vendor/steam_api64.dll"
     fi
     [ -f "$SA64_SRC" ] || die "steam_api64.dll source missing ($SA64_SRC)"
 }
