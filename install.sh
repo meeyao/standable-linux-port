@@ -5,6 +5,9 @@
 #   ./install.sh              install / repair (idempotent)
 #   ./install.sh --check      doctor: verify a running setup
 #   ./install.sh --uninstall  remove everything this script added
+#   ./install.sh --build-from-source  cross-compile Ignition shim from source
+#                          (needs clang/lld/cmake/ninja + Windows SDK via xwin;
+#                          falls back to prebuilt vendor/ copies without it)
 #
 # Works with any host-launchable Proton build. Tested on Arch Linux.
 
@@ -19,6 +22,198 @@ warn() { printf '\033[1;33m ->\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 bak()  { # bak <file> — timestamped backup before overwrite
     [ -f "$1" ] && cp -n "$1" "$1.bak-$STAMP" 2>/dev/null
+}
+
+IGNITION_URL="${IGNITION_URL:-https://github.com/BnuuySolutions/Ignition.git}"
+IGNITION_SRC="${IGNITION_SRC:-$HOME/.cache/standable-ignition}"
+XWIN_VERSION="${XWIN_VERSION:-0.10.0}"
+XWIN_URL="${XWIN_URL:-https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz}"
+
+# Ensure xwin is available (PATH = ~/.local/bin if a rootless copy exists). 
+ensure_xwin() {
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v xwin >/dev/null 2>&1; then return 0; fi
+    if [ ! -f "$HOME/.local/bin/xwin" ]; then
+        say "Fetching prebuilt xwin v$XWIN_VERSION …"
+        mkdir -p "$HOME/.local/bin"
+        tmp=$(mktemp)
+        if ! curl -fsSL "$XWIN_URL" -o "$tmp"; then
+            rm -f "$tmp"; return 1
+        fi
+        tar -xzf "$tmp" -C "$HOME/.local/bin" --strip-components=1 || { rm -f "$tmp"; return 1; }
+        rm -f "$tmp"
+        chmod +x "$HOME/.local/bin/xwin"
+    fi
+    command -v xwin >/dev/null 2>&1
+}
+
+# Ensure the Windows SDK is splatted to ~/.xwin-cache/splat via xwin (one-time,
+# ~1-2 GB download).
+ensure_xwin_sdk() {
+    [ -d "$HOME/.xwin-cache/splat" ] && return 0
+    ensure_xwin || return 1
+    say "Downloading Windows SDK via xwin (~1-2 GB, one-time)…"
+    mkdir -p "$HOME/.xwin-cache"
+    XWIN_ACCEPT_LICENSE=1 xwin splat --output "$HOME/.xwin-cache/splat"
+}
+
+# ensure_build_toolchain — make sure every tool needed by `--build-from-source`
+# exists. Installs missing system packages via the distro package manager (with
+# user confirmation + sudo), fetches prebuilt xwin, and splats the SDK.
+ensure_build_toolchain() {
+    local missing_all=""
+    for t in cmake ninja clang clang++ lld-link llvm-rc llvm-ml; do
+        command -v "$t" >/dev/null 2>&1 || missing_all="$missing_all $t"
+    done
+    command -v strace >/dev/null 2>&1 || missing_all="$missing_all strace"
+    command -v git >/dev/null 2>&1    || missing_all="$missing_all git"
+
+    if [ -n "$missing_all" ]; then
+        local id id_like; . /etc/os-release 2>/dev/null
+        local pm=""; local pkgs=""
+        case "$ID $ID_LIKE" in
+            *arch*|*cachyos*|*manjaro*) pm="pacman -S --needed"; pkgs="clang lld llvm cmake ninja strace git" ;;
+            *fedora*|*centos*|*rhel*|*rocky*) pm="dnf install -y";            pkgs="clang lld llvm cmake ninja-build strace git" ;;
+            *debian*|*ubuntu*|*mint*) pm="apt-get install -y";                pkgs="clang lld llvm cmake ninja-build strace git" ;;
+            *) pm="";;
+        esac
+        if [ -z "$pm" ]; then
+            die "--build-from-source: missing:$missing_all. Install them manually (clang, lld, cmake, ninja, strace, git)."
+        fi
+        local doit=""
+        [ -n "${ASSUME_YES:-}" ] || { read -r -p "Missing build tools (${missing_all# }). Install via '$pm $pkgs' (needs sudo)? [y/N] " doit; }
+        case "$doit" in y|Y|yes) ;; *) die "--build-from-source: aborting, no toolchain installed.";; esac
+        say "Installing build toolchain (may prompt for sudo)…"
+        sudo -v 2>/dev/null || true
+        sudo $pm $pkgs || die "--build-from-source: package install failed."
+    fi
+
+    ensure_xwin_sdk || die "--build-from-source: could not set up xwin/Windows SDK (download the Linux xwin release from github.com/Jake-Shadle/xwin)."
+}
+
+
+# build_ignition — clone + cross-compile Ignition (Linux .so + Windows .exe/.dll)
+# from source. Needs clang/lld/llvm (MSVC target), cmake, ninja, and the Windows
+# SDK via xwin (~/.xwin-cache). Only used with --build-from-source; otherwise the
+# prebuilt vendor/ copies are used. Outputs:
+#   $IGNITION_SRC/build/Ignition-Linux-Windows/{libdriver_ignition.so,ignition_server.exe,ignition_bridge.dll}
+# Skips work (and the slow build) when the cached source is already up to date
+# with upstream and the artifacts exist.
+build_ignition() {
+    local out="$IGNITION_SRC/build/Ignition-Linux-Windows"
+    local have=0
+    [ -f "$out/libdriver_ignition.so" ] && [ -f "$out/ignition_server.exe" ] && [ -f "$out/ignition_bridge.dll" ] && have=1
+
+    if [ ! -d "$IGNITION_SRC/.git" ]; then
+        say "Cloning Ignition source…"
+        git clone --depth 1 "$IGNITION_URL" "$IGNITION_SRC"
+    fi
+
+    # Decide whether we need (re)building: skip only if artifacts exist AND the
+    # cached source is current with upstream. Fetching is cheap; the build isn't.
+    local dirty=0
+    ( cd "$IGNITION_SRC" && git fetch origin >/dev/null 2>&1 ) || dirty=1
+    local local_head remote_head
+    local_head=$(git -C "$IGNITION_SRC" rev-parse HEAD 2>/dev/null)
+    remote_head=$(git -C "$IGNITION_SRC" rev-parse origin/HEAD 2>/dev/null || \
+                  git -C "$IGNITION_SRC" rev-parse origin/master 2>/dev/null || \
+                  git -C "$IGNITION_SRC" rev-parse origin/main 2>/dev/null)
+    if [ -z "$local_head" ] || [ -z "$remote_head" ] || [ "$local_head" != "$remote_head" ]; then
+        dirty=1
+    fi
+    if [ "$have" = 1 ] && [ "$dirty" = 0 ]; then
+        return 0    # already built at current upstream commit
+    fi
+
+    # We're actually going to build — make sure the toolchain + SDK are present.
+    ensure_build_toolchain
+
+    if [ "$dirty" = 1 ] && [ "$have" = 1 ]; then
+        say "Ignition source changed upstream — rebuilding…"
+    fi
+
+    say "Building Ignition from source (this can take several minutes)…"
+    ( cd "$IGNITION_SRC" \
+        && git fetch origin --depth 1 \
+        && ( git checkout -f origin/HEAD 2>/dev/null \
+             || git checkout -f origin/main 2>/dev/null \
+             || git reset --hard origin/master ) \
+        && cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
+        && cmake --build build ) >/dev/null 2>&1 \
+        || die "--build-from-source: Ignition build failed (see $IGNITION_SRC/build for logs)"
+
+    [ -f "$out/libdriver_ignition.so" ] && [ -f "$out/ignition_server.exe" ] && [ -f "$out/ignition_bridge.dll" ] \
+        || die "--build-from-source: built artifacts missing at $out"
+}
+
+# build_shims — cross-compile vr_bootstrap.exe and vrpathreg2.exe from the C
+# sources in build/ using xwin. Outputs are cached in
+# ~/.cache/standable-ignition/shims/ and only rebuilt when the source is newer.
+# Sets SHIM_DIR to the directory containing the usable .exe files.
+SHIM_CACHE="$HOME/.cache/standable-ignition/shims"
+SHIM_DIR=""
+build_shims() {
+    mkdir -p "$SHIM_CACHE"
+    local src_bc="$REPO/build/vr_bootstrap.c"
+    local src_rc="$REPO/build/vrpathreg2.c"
+    local out_bc="$SHIM_CACHE/vr_bootstrap.exe"
+    local out_rc="$SHIM_CACHE/vrpathreg2.exe"
+    local need=0
+    [ ! -f "$out_bc" ] || [ "$src_bc" -nt "$out_bc" ] && need=1
+    [ ! -f "$out_rc" ] || [ "$src_rc" -nt "$out_rc" ] && need=1
+    if [ "$need" = 1 ]; then
+        say "Building VR shims from source (vr_bootstrap + vrpathreg2)…"
+        local xwin="$HOME/.xwin-cache/splat"
+        local inc_flags="-I$xwin/crt/include -I$xwin/sdk/include/ucrt -I$xwin/sdk/include/um -I$xwin/sdk/include/shared"
+        local lib_flags="-Wl,/LIBPATH:$xwin/crt/lib/x86_64 -Wl,/LIBPATH:$xwin/sdk/lib/um/x86_64 -Wl,/LIBPATH:$xwin/sdk/lib/ucrt/x86_64 -lkernel32 -luser32 -ladvapi32 -lshell32 -llibcmt -llibucrt -loldnames"
+        clang --target=x86_64-pc-windows-msvc -fuse-ld=lld-link -DWIN32_LEAN_AND_MEAN \
+            $inc_flags "$src_bc" -o "$out_bc" $lib_flags \
+            || die "build_shims: vr_bootstrap.exe failed"
+        clang --target=x86_64-pc-windows-msvc -fuse-ld=lld-link -DWIN32_LEAN_AND_MEAN \
+            $inc_flags "$src_rc" -o "$out_rc" $lib_flags \
+            || die "build_shims: vrpathreg2.exe failed"
+    fi
+    SHIM_DIR="$SHIM_CACHE"
+}
+
+# resolve_shims — pick vendored or freshly-built shim binaries (.exe).
+# Sets SHIM_DIR to the directory containing vr_bootstrap.exe + vrpathreg2.exe.
+resolve_shims() {
+    if [ -n "$BUILD_FROM_SOURCE" ]; then
+        build_shims
+    else
+        SHIM_DIR="$REPO/build"
+    fi
+    [ -f "$SHIM_DIR/vr_bootstrap.exe" ] && [ -f "$SHIM_DIR/vrpathreg2.exe" ] \
+        || die "vr_bootstrap.exe / vrpathreg2.exe missing from $SHIM_DIR"
+}
+
+# resolve_ignition — pick source that actually produces the 3 shim binaries.
+# Prefers a local source build (only when --build-from-source), else vendor/.
+resolve_ignition() {
+    if [ -n "$BUILD_FROM_SOURCE" ]; then
+        build_ignition
+        local out="$IGNITION_SRC/build/Ignition-Linux-Windows"
+        IGN_LINUX64="$out"
+    else
+        IGN_LINUX64="$REPO/vendor"
+    fi
+    for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll; do
+        [ -f "$IGN_LINUX64/$v" ] || die "$v missing ($IGN_LINUX64)"
+    done
+    resolve_shims
+}
+
+# resolve_reg — PSVR2 hidraw registry file is vendored in config/, but when
+# building Ignition from source we use the fresh copy from its support/ so it
+# stays in lockstep with upstream. Sets IGN_PSVR2_REG.
+resolve_reg() {
+    if [ -n "$BUILD_FROM_SOURCE" ] && [ -f "$IGN_LINUX64/wine_psvr2_hidraw.reg" ]; then
+        IGN_PSVR2_REG="$IGN_LINUX64/wine_psvr2_hidraw.reg"
+    else
+        IGN_PSVR2_REG="$REPO/config/wine_psvr2_hidraw.reg"
+    fi
+    [ -f "$IGN_PSVR2_REG" ] || die "wine_psvr2_hidraw.reg missing ($IGN_PSVR2_REG)"
 }
 
 # ---------------------------------------------------------------- detection --
@@ -153,13 +348,21 @@ setup_vrchat_link() {
 # ------------------------------------------------------------------- checks --
 require() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed."; }
 
-# ---------------------------------------------------------- --proton flag --
+# ---------------------------------------------------- flags (--proton etc.) --
+BUILD_FROM_SOURCE=""
 PROTON_OVERRIDE=""
+ASSUME_YES=""
 ARGS=()
 for a in "$@"; do
-    if [ "$a" = "--proton" ]; then PROTON_OVERRIDE="PENDING"
-    elif [ "$PROTON_OVERRIDE" = "PENDING" ]; then PROTON_OVERRIDE="$a"
-    else ARGS+=("$a"); fi
+    case "$a" in
+        --build-from-source) BUILD_FROM_SOURCE=1 ;;
+        --proton) PROTON_OVERRIDE="PENDING" ;;
+        --assume-yes|-y) ASSUME_YES=1 ;;
+        *)
+            if [ "$PROTON_OVERRIDE" = "PENDING" ]; then PROTON_OVERRIDE="$a"
+            else ARGS+=("$a"); fi
+            ;;
+    esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
@@ -326,9 +529,8 @@ if [ -n "${VRC_COMPAT:-}" ]; then say "VRChat pfx : $VRC_COMPAT"; fi
 [ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
 [ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
 [ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing, game layout changed or incomplete install"
-for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll; do
-    [ -f "$REPO/vendor/$v" ] || die "vendor/$v missing, incomplete checkout?"
-done
+resolve_ignition
+resolve_reg
 
 # -- prefix bootstrap --------------------------------------------------------
 if [ ! -d "$PFX/drive_c/windows" ]; then
@@ -343,13 +545,13 @@ fi
 # PSVR2 Sense controller registry (Ignition) — imported by the shim each run
 mkdir -p "$GAME_DIR/bin/linux64"
 bak "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg"
-cp "$REPO/config/wine_psvr2_hidraw.reg" "$GAME_DIR/bin/linux64/"
+cp "$IGN_PSVR2_REG" "$GAME_DIR/bin/linux64/"
 
 say "Deploying prefix binaries…"
 mkdir -p "$PFX/drive_c/vrclient/bin" "$WIN64"
-bak "$PFX/drive_c/vr_bootstrap.exe";  cp "$REPO/build/vr_bootstrap.exe" "$PFX/drive_c/"
-bak "$WIN64/vrpathreg.exe";           cp "$REPO/build/vrpathreg2.exe"   "$WIN64/vrpathreg.exe"
-cp "$REPO/build/vrpathreg2.exe"       "$WIN64/vrmonitor.exe"           # existence-check only
+bak "$PFX/drive_c/vr_bootstrap.exe";  cp "$SHIM_DIR/vr_bootstrap.exe" "$PFX/drive_c/"
+bak "$WIN64/vrpathreg.exe";           cp "$SHIM_DIR/vrpathreg2.exe"   "$WIN64/vrpathreg.exe"
+cp "$SHIM_DIR/vrpathreg2.exe"       "$WIN64/vrmonitor.exe"           # existence-check only
 PC="$PROTON"; PC="${PC%/proton}/files/lib/wine/x86_64-windows"
 ls "$PC"/vrclient*.dll >/dev/null 2>&1 || die "vrclient dlls not found at $PC"
 bak "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
@@ -410,11 +612,11 @@ say "Deploying Linux driver shim (Ignition)…"
 mkdir -p "$GAME_DIR/bin/linux64"
 bak "$GAME_DIR/bin/linux64/driver_standable.so"
 rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
-cp "$REPO/vendor/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
+cp "$IGN_LINUX64/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
 bak "$GAME_DIR/bin/linux64/ignition_server.exe"
-cp "$REPO/vendor/ignition_server.exe" "$GAME_DIR/bin/linux64/"
+cp "$IGN_LINUX64/ignition_server.exe" "$GAME_DIR/bin/linux64/"
 bak "$GAME_DIR/bin/linux64/ignition_bridge.dll"
-cp "$REPO/vendor/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
+cp "$IGN_LINUX64/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
 
 # Steamworks runtime requirement of the Windows driver. driver_standable.dll
 # imports steam_api64.dll (SteamAPI_* init); without it ignition_server.exe
