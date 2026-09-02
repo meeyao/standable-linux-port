@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Standable GUI
-Comment=Standable Full Body Estimation settings (Linux port launcher)
-Exec=@HOME@/bin/standable-gui
-Icon=@HOME@/.local/share/icons/standable.png
-Terminal=false
-Categories=Game;

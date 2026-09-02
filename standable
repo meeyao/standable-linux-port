@@ -1,20 +1,12 @@
 #!/bin/bash
 # standable — front door for the Standable FBE Linux patch.
-# Usage: ./standable [install|gui|check|uninstall|proton PATH]
+# Usage: ./standable [install|check|uninstall|proton PATH]
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "${1:-help}" in
     install)
         exec "$DIR/install.sh" "${@:2}"
-        ;;
-    gui)
-        L="$HOME/bin/standable-gui"
-        if [ ! -x "$L" ]; then
-            echo "Not installed yet. Run: ./standable install" >&2
-            exit 1
-        fi
-        exec "$L"
         ;;
     check|status)
         exec "$DIR/install.sh" --check
@@ -28,7 +20,7 @@ case "${1:-help}" in
         exec "$DIR/install.sh" "$@"
         ;;
     --version|-v)
-        echo "standable v3.0.0"; exit 0;;
+        echo "standable v3.1.0"; exit 0;;
     help|--help|-h|*)
         cat <<EOF
 Standable Full Body Estimation — Linux patch
@@ -37,14 +29,13 @@ Usage: ./standable <command>
 
   install            Install or repair (safe to re-run)
                        options: --proton /path/to/proton
-  gui                Launch the Standable GUI (requires SteamVR running)
   check              Verify the installed setup
   uninstall          Remove everything this patch added
 
 Typical flow:
   ./standable install
-  # start SteamVR, then:
-  ./standable gui
+  # set Steam launch options: bash ~/bin/standable_launch_hook.sh %command%
+  # start SteamVR, then launch Standable from Steam
 EOF
         ;;
 esac

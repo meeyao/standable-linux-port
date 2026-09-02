@@ -69,7 +69,7 @@ fix_vrchat() {
 
 fix_s
 fix_vrchat
-reenable_driver
+fix_steamvr_state
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
 exec "$PROTON" run "$@"
