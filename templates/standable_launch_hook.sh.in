@@ -2,20 +2,27 @@
 # Standable launch hook — set as Steam launch options:
 #   bash ~/bin/standable_launch_hook.sh %command%
 #
-# Creates/repairs symlinks that Proton prefix maintenance wipes on every
-# proton run, then hands off to Steam's normal launch (%command%).
-# Steam tracks the game natively; hours / overlay / etc. all work normally.
-#
-# ALTERNATIVE: use ~/bin/standable-gui directly (runs the full wrapper).
-# This hook is for when you want Steam to own the launch.
+# Runs the game through the SAME $PROTON run the driver shim uses, so game and
+# driver share ONE prefix/wineserver (split wineservers break their IPC and the
+# game never reaches SteamVR). %command% is ignored: we always launch
+# $GAME_DIR/Standable.exe ourselves.
 #
 # NOTE: s: convention is baked at install time from the Proton the installer
-# picked. %command% expands to the game exe (not the proton binary), so we
-# never try to re-detect it at runtime here.
+# picked. The game exe path and Proton are baked too, so nothing is re-detected
+# at runtime.
 
 STEAM_COMPAT_DATA_PATH="@COMPAT@"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH
+PROTON="@PROTON@"
+GAME_DIR="@GAME_DIR@"
+
+# We launch via bare $PROTON run (sharing the driver's wineserver), which
+# bypasses Steam's launcher that normally exports these. The game's Steamworks
+# DRM needs to know which app it is, else SteamAPI_Init can't authenticate and
+# the game shows "Steam authentication failed".
+export SteamAppId="@APP_ID@"
+export SteamGameId="@APP_ID@"
 
 PFX="$STEAM_COMPAT_DATA_PATH/pfx"
 S_LINK="$PFX/dosdevices/s:"
@@ -53,4 +60,4 @@ fix_vrchat
 reenable_driver
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
-exec "$@"
+exec "$PROTON" run "$GAME_DIR/Standable.exe"

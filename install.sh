@@ -758,23 +758,52 @@ ln -sfn "$S_TARGET" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
 
 # -- seed merge --------------------------------------------------------------
 say "Merging external_drivers into ~/.config/openvr/openvrpaths.vrpath…"
-python3 - "$HOME" <<'PYEOF'
+python3 - "$HOME" "$GAME_DIR" <<'PYEOF'
 import json, os, sys
-home = sys.argv[1]
-zpath = os.path.join(home, '.local/share/Steam/steamapps/common',
-                     'Standable Full Body Estimation')
-upath = zpath
+home, game_dir = sys.argv[1], sys.argv[2]
+upath = game_dir
 seed_path = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(seed_path), exist_ok=True)
 try:
     data = json.load(open(seed_path))
 except Exception:
     data = {"runtime": [], "version": 1}
-ed = [e for e in data.get('external_drivers', [])
+ed = [e for e in (data.get('external_drivers') or [])
       if not ('Standable' in e and ('\\' in e or upath == e))]
 if upath not in ed: ed.insert(0, upath)
 data['external_drivers'] = ed
 json.dump(data, open(seed_path, 'w'), indent=2)
+print("  entries:", ", ".join(e[:40] for e in ed))
+PYEOF
+
+# -- seed the game's Windows-side openvrpaths.vrpath --------------------------
+# The game runs under Wine and reads %LOCALAPPDATA%\openvr\openvrpaths.vrpath,
+# NOT the Linux ~/.config copy. If its "runtime" doesn't point at SteamVR the
+# game pops a "fix the SteamVR driver path" dialog on every launch. Seed it
+# with the runtime (via SteamPath registry -> C:\Program Files (x86)\Steam)
+# and the game's external_drivers entry so it stops asking.
+say "Seeding game-side openvrpaths.vrpath…"
+python3 - "$PFX" "$GAME_DIR" <<'PYEOF'
+import json, os, sys
+pfx, game_dir = sys.argv[1], sys.argv[2]
+p = os.path.join(pfx, 'drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath')
+os.makedirs(os.path.dirname(p), exist_ok=True)
+try:
+    data = json.load(open(p))
+except Exception:
+    data = {}
+runtime = [r for r in data.get('runtime', []) if 'vrclient' not in r.lower()]
+steamvr = r'C:\Program Files (x86)\Steam\steamapps\common\SteamVR'
+if steamvr not in runtime:
+    runtime.insert(0, steamvr)
+data['runtime'] = runtime
+ed = [e for e in (data.get('external_drivers') or [])
+      if not ('Standable' in e and ('\\' in e or game_dir == e))]
+if game_dir not in ed: ed.insert(0, game_dir)
+data['external_drivers'] = ed
+data['version'] = 1
+json.dump(data, open(p, 'w'), indent=3)
+print("  runtime:", ", ".join(r[:50] for r in runtime))
 print("  entries:", ", ".join(e[:40] for e in ed))
 PYEOF
 
@@ -829,7 +858,7 @@ gen() { # gen <template> <dest>
     S_TARGET="${S_TARGET:-$S_ROOT}"
     sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
         -e "s|@PROTON@|$PROTON|g"       -e "s|@STEAMVR@|$STEAMVR|g" \
-        -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@S_ROOT@|$S_ROOT|g" -e "s|@S_TARGET@|$S_TARGET|g" \
+        -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@S_ROOT@|$S_ROOT|g" -e "s|@S_TARGET@|$S_TARGET|g" -e "s|@APP_ID@|$APP_ID|g" \
         -e "s|@HOME@|$HOME|g" \
         -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
         "$REPO/templates/$1" > "$2"
