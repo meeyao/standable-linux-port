@@ -5,9 +5,10 @@
 #   ./install.sh              install / repair (idempotent)
 #   ./install.sh --check      doctor: verify a running setup
 #   ./install.sh --uninstall  remove everything this script added
-#   ./install.sh --build-from-source  cross-compile Ignition shim from source
-#                          (needs clang/lld/cmake/ninja + Windows SDK via xwin;
-#                          falls back to prebuilt vendor/ copies without it)
+#   ./install.sh --build      rebuild the Ignition shim from source
+#                          (--force to rebuild even if cached; needs
+#                          clang/lld/cmake/ninja + Windows SDK via xwin,
+#                          else falls back to prebuilt vendor/ copies)
 #   Every run is logged to ~/.local/state/standable/install.log
 #   (--log FILE writes there instead). --diagnose appends a full system
 #   dump to the log for sharing when filing issues.
@@ -41,10 +42,13 @@ ensure_xwin() {
         say "Fetching prebuilt xwin v$XWIN_VERSION …"
         mkdir -p "$HOME/.local/bin"
         tmp=$(mktemp)
-        if ! curl -fsSL "$XWIN_URL" -o "$tmp"; then
-            rm -f "$tmp"; return 1
+        if ! curl -fsSL --max-time 120 "$XWIN_URL" -o "$tmp"; then
+            rm -f "$tmp"
+            warn "xwin download failed:"
+            warn "  $XWIN_URL"
+            return 1
         fi
-        tar -xzf "$tmp" -C "$HOME/.local/bin" --strip-components=1 || { rm -f "$tmp"; return 1; }
+        tar -xzf "$tmp" -C "$HOME/.local/bin" --strip-components=1 || { rm -f "$tmp"; warn "xwin archive corrupt"; return 1; }
         rm -f "$tmp"
         chmod +x "$HOME/.local/bin/xwin"
     fi
@@ -58,7 +62,22 @@ ensure_xwin_sdk() {
     ensure_xwin || return 1
     say "Downloading Windows SDK via xwin (~1-2 GB, one-time)…"
     mkdir -p "$HOME/.xwin-cache"
-    XWIN_ACCEPT_LICENSE=1 xwin splat --output "$HOME/.xwin-cache/splat" >>"${LOG_FILE:-/dev/null}" 2>&1
+    # Show live progress: xwin writes into ~/.xwin-cache; report its size every
+    # few seconds so the download never looks hung.
+    ( last=""
+      while true; do
+          s=$(du -sh "$HOME/.xwin-cache" 2>/dev/null | awk '{print $1}')
+          [ "$s" != "$last" ] && { printf '  SDK download: %s\n' "$s"; last="$s"; }
+          sleep 5
+      done ) &
+    local prog=$!
+    if ! xwin --accept-license splat --output "$HOME/.xwin-cache/splat" >>"${LOG_FILE:-/dev/null}" 2>&1; then
+        kill $prog 2>/dev/null
+        warn "xwin splat failed. Last lines from ${LOG_FILE:-log}:"
+        [ -n "${LOG_FILE:-}" ] && tail -8 "$LOG_FILE" | sed 's/^/    /'
+        return 1
+    fi
+    kill $prog 2>/dev/null
 }
 
 # ensure_build_toolchain — make sure every tool needed by `--build-from-source`
@@ -76,7 +95,7 @@ ensure_build_toolchain() {
         local id id_like; . /etc/os-release 2>/dev/null
         local pm=""; local pkgs=""
         case "$ID $ID_LIKE" in
-            *arch*|*cachyos*|*manjaro*) pm="pacman -S --needed"; pkgs="clang lld llvm cmake ninja strace git" ;;
+            *arch*|*cachyos*|*manjaro*) pm="pacman -S --needed --noconfirm"; pkgs="clang lld llvm cmake ninja strace git" ;;
             *fedora*|*centos*|*rhel*|*rocky*) pm="dnf install -y";            pkgs="clang lld llvm cmake ninja-build strace git" ;;
             *debian*|*ubuntu*|*mint*) pm="apt-get install -y";                pkgs="clang lld llvm cmake ninja-build strace git" ;;
             *) pm="";;
@@ -89,7 +108,13 @@ ensure_build_toolchain() {
         case "$doit" in y|Y|yes) ;; *) die "--build-from-source: aborting, no toolchain installed.";; esac
         say "Installing build toolchain (may prompt for sudo)…"
         sudo -v 2>/dev/null || true
-        sudo $pm $pkgs >>"$LOG_FILE" 2>&1 || die "--build-from-source: package install failed (see $LOG_FILE)"
+        if ! sudo $pm $pkgs >>"$LOG_FILE" 2>&1; then
+            # surface the real reason (e.g. mirror 404, conflict) instead of a
+            # bare "see the log" — mirror flakiness is the usual culprit
+            warn "package install failed. Last lines from $LOG_FILE:"
+            tail -8 "$LOG_FILE" | sed 's/^/    /'
+            die "--build-from-source: package install failed (full log: $LOG_FILE)"
+        fi
     fi
 
     ensure_xwin_sdk || die "--build-from-source: could not set up xwin/Windows SDK (download the Linux xwin release from github.com/Jake-Shadle/xwin)."
@@ -125,7 +150,7 @@ build_ignition() {
     if [ -z "$local_head" ] || [ -z "$remote_head" ] || [ "$local_head" != "$remote_head" ]; then
         dirty=1
     fi
-    if [ "$have" = 1 ] && [ "$dirty" = 0 ]; then
+    if [ "$have" = 1 ] && [ "$dirty" = 0 ] && [ -z "$BUILD_FORCE" ]; then
         return 0    # already built at current upstream commit
     fi
 
@@ -163,8 +188,9 @@ build_shims() {
     local out_bc="$SHIM_CACHE/vr_bootstrap.exe"
     local out_rc="$SHIM_CACHE/vrpathreg2.exe"
     local need=0
-    [ ! -f "$out_bc" ] || [ "$src_bc" -nt "$out_bc" ] && need=1
-    [ ! -f "$out_rc" ] || [ "$src_rc" -nt "$out_rc" ] && need=1
+    [ -z "$BUILD_FORCE" ] || need=1
+    [ "$need" = 1 ] || [ ! -f "$out_bc" ] || [ "$src_bc" -nt "$out_bc" ] && need=1
+    [ "$need" = 1 ] || [ ! -f "$out_rc" ] || [ "$src_rc" -nt "$out_rc" ] && need=1
     if [ "$need" = 1 ]; then
         say "Building VR shims from source (vr_bootstrap + vrpathreg2)…"
         local xwin="$HOME/.xwin-cache/splat"
@@ -420,6 +446,7 @@ require() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not ins
 # ---------------------------------------------------- flags (--proton etc.) --
 ORIG_ARGS=("$@")
 BUILD_FROM_SOURCE=""
+BUILD_FORCE=""
 PROTON_OVERRIDE=""
 ASSUME_YES=""
 LOG_FILE=""
@@ -427,7 +454,8 @@ DIAGNOSE=""
 ARGS=()
 for a in "$@"; do
     case "$a" in
-        --build-from-source) BUILD_FROM_SOURCE=1 ;;
+        --build|--rebuild|--build-from-source) BUILD_FROM_SOURCE=1 ;;
+        --force|-f) BUILD_FORCE=1 ;;
         --proton) PROTON_OVERRIDE="PENDING" ;;
         --assume-yes|-y) ASSUME_YES=1 ;;
         --log) LOG_FILE="PENDING" ;;
@@ -843,17 +871,6 @@ if command -v ldd >/dev/null 2>&1; then
 fi
 
 say "Installing launchers…"
-# Desktop icon: copy the game's wave icon to the standard icons dir so the
-# desktop entry resolves regardless of game updates/moves.
-ICON_SRC="$GAME_DIR/resources/icons/stndbl_wave@2x.png"
-ICON_DST="$HOME/.local/share/icons/standable.png"
-if [ -f "$ICON_SRC" ]; then
-    mkdir -p "$(dirname "$ICON_DST")"
-    bak "$ICON_DST"
-    cp "$ICON_SRC" "$ICON_DST"
-else
-    warn "icon not found: $ICON_SRC (desktop entry will fall back to generic)"
-fi
 gen() { # gen <template> <dest>
     S_TARGET="${S_TARGET:-$S_ROOT}"
     sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
@@ -885,6 +902,6 @@ cat <<EOF
   Start SteamVR first.
   Verify anytime with:  $REPO/install.sh --check
   Log for this run:     $LOG_FILE
-  Build from source:    $REPO/install.sh --build-from-source
+  Build from source:    $REPO/install.sh --build --force
   Problems?             See TROUBLESHOOTING.md in the repo.
 EOF

@@ -25,16 +25,17 @@ cd standable-linux-port
 ./install.sh
 ```
 
-Then:
+Then launch it through Steam as you would any other title:
 
-```sh
-./standable gui     # with SteamVR running
-```
+1. Right-click **Standable** in Steam → **Properties** → **Launch Options**, set:
+   ```
+   bash ~/bin/standable_launch_hook.sh %command%
+   ```
+2. Start **SteamVR**, then click **Play** on Standable.
 
-Sliders apply in realtime and T-pose calibration works. The installer also
-creates a "Standable GUI" desktop entry if you prefer clicking — complete
-with the game's own icon, copied to `~/.local/share/icons/` so it survives
-game updates or moves.
+The launch hook runs the game and driver on the same Proton build over one
+prefix (their IPC depends on a shared wine server) and passes the appid
+context the game's Steam authentication requires.
 
 The game can live on any Steam library (including a secondary/dual-boot drive
 mounted outside the default Steam root); the installer finds it via
@@ -56,18 +57,33 @@ mounted outside the default Steam root); the installer finds it via
 | `./standable install` | Install or repair (safe to re-run) |
 | `./standable check` | Verify the installed setup |
 | `./standable uninstall` | Remove everything this patch added |
-| `./standable gui` | Launch the GUI |
 | `./standable install --proton PATH` | Use a specific Proton build |
+| `./standable install --build` | Rebuild the Ignition shim from source (`--force` rebuilds even if cached; needs clang/lld/cmake/ninja + Windows SDK via xwin, else prebuilt `vendor/` copies are used) |
 
 If several Proton builds are installed you'll be asked which one to use.
 Whatever you pick, don't mix builds later without re-running
 `./standable install`.
 
+## Logging & diagnostics
+
+Every run writes a full transcript to `~/.local/state/standable/install.log`
+(`--log FILE` writes there instead). `--diagnose` appends a system dump —
+OS/kernel, GPU/Vulkan, display server, Steam/Proton/game/prefix, SteamVR
+settings, and the vrserver.txt tail — to the same log:
+
+```sh
+./install.sh --diagnose      # or: ./standable check --diagnose
+cat ~/.local/state/standable/install.log
+```
+
+When filing an issue, attach the `--diagnose` log instead of pasting the
+terminal output — it bundles everything needed.
+
 ## Important
 
-- Launch the GUI only via `./standable gui` (or the desktop entry). Running
-  it through Steam's Play button puts it inside Steam's sandbox, which
-  breaks rendering and realtime settings.
+- Launch the game via Steam with the launch hook set (see Install). Don't run
+  Standable through Steam's plain Play button without the hook — the driver
+  and game must share one Proton build and prefix.
 - Don't change the game's compatibility tool after installing; if you do,
   run `./standable install` again so both sides use the same Proton build.
 - The installer merges the Standable driver entry into
@@ -80,7 +96,8 @@ Whatever you pick, don't mix builds later without re-running
 | Symptom | Fix |
 |---|---|
 | SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install` (deploys `steam_api64.dll`, the driver's Steamworks runtime), then restart SteamVR |
-| GUI opens then instantly closes | Run `./standable check`; make sure SteamVR is running first |
+| Game launches but no GUI | Make sure the launch hook is set and SteamVR is running; check `./standable check` |
+| "Steam authentication failed" dialog | Re-run `./standable install` (the hook exports `SteamAppId`); don't launch the game without the hook |
 | Sliders don't apply in realtime | Re-run `./standable install`, restart SteamVR |
 | T-pose fails intermittently | Re-run `./standable install` (repairs drive links), restart SteamVR |
 | "no Proton builds found" | Pass `--proton /path/to/proton`, or install any Proton build |
@@ -90,12 +107,11 @@ Whatever you pick, don't mix builds later without re-running
 
 SteamVR loads a small Linux shim (`driver_standable.so`) as a native driver.
 The shim spawns Ignition's `ignition_server.exe` under Proton in the game's
-existing prefix, which loads the game's own Windows driver DLL. The GUI also
-runs under that same prefix and Proton build, so GUI and driver share a
-single wine server; the named pipes between them are what make settings
-updates realtime. A few helper stubs satisfy the GUI's SteamVR presence
-checks, and the installer keeps the prefix's drive links alive against
-Proton's per-launch maintenance passes.
+existing prefix, which loads the game's own Windows driver DLL. The game runs
+under that same prefix and Proton build (the launch hook enforces it), so the
+game and driver share a single wine server; the named pipes between them are
+what make settings updates realtime. The installer keeps the prefix's drive
+links alive against Proton's per-launch maintenance passes.
 
 ## Credits
 

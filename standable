@@ -9,7 +9,7 @@ case "${1:-help}" in
         exec "$DIR/install.sh" "${@:2}"
         ;;
     check|status)
-        exec "$DIR/install.sh" --check
+        exec "$DIR/install.sh" --check "${@:2}"
         ;;
     uninstall|remove)
         exec "$DIR/install.sh" --uninstall
