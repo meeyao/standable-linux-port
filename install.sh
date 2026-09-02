@@ -263,7 +263,8 @@ fetch_steam_api64() {
        && [ "$(sha256sum "$STEAM_API64_CACHE" | awk '{print $1}')" = "$STEAM_API64_SHA256" ]; then
         echo "$STEAM_API64_CACHE"; return 0
     fi
-    say "Fetching Steamworks SDK 1.60 steam_api64.dll…"
+    # status goes to the log, not stdout (the return value is captured)
+    _log "Fetching Steamworks SDK 1.60 steam_api64.dll…"
     mkdir -p "$(dirname "$STEAM_API64_CACHE")"
     tmp=$(mktemp)
     if curl -fsSL --max-time 90 "$STEAM_API64_URL" -o "$tmp" 2>/dev/null \
