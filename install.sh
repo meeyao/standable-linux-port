@@ -483,7 +483,10 @@ setup_dxvk_sarek() {
         warn "  or dwproton (then re-run ./install.sh) to get a working VR background."
         return 1
     fi
-    local sname; sname="$(basename "$(dirname "$(dirname "$ssrc")")")"
+    # ssrc looks like .../compatibilitytools.d/<proton>/files/lib/wine/dxvk-sarek
+    local sname
+    sname=$(printf '%s' "$ssrc" | sed -nE 's#.*compatibilitytools\.d/([^/]+)/.*#\1#p')
+    [ -z "$sname" ] && sname="$(basename "$ssrc")"
     say "Layering dxvk-sarek over the prefix from: $sname"
     warn "  Note: this sarek build is sourced from $sname, not the selected Proton."
     warn "  Renderer bytes may differ slightly between Proton versions; this is expected."
