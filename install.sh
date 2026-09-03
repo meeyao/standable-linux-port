@@ -378,6 +378,33 @@ pick_proton() {
     [ -d "$PROTON" ] && [ -x "$PROTON/proton" ] && PROTON="$PROTON/proton"
 }
 
+# clear_stale_services — when switching Proton builds the OLD build's wineserver
+# (and the game/driver it hosts) keeps running and blocks the new one: Steam's
+# "Play" appears to do nothing because the app is considered already running /
+# the new wineserver can't take over the prefix. Kill anything still hosted by
+# the previous (now-unselected) Proton's wineserver so the switch takes effect
+# cleanly. Same-class fix as the GE version-mismatch hang.
+clear_stale_services() {
+    local newname oldname pid cmd
+    newname=$(basename "$PROTON")
+    [ "$newname" = "proton" ] && newname=$(basename "$(dirname "$PROTON")")
+    local killed=0
+    # ps -o args= yields the full command (may contain spaces); first field is pid
+    while read -r pid __rest; do
+        case "$__rest" in *wineserver*) ;; *) continue;; esac
+        cmd="$__rest"
+        oldname=$(printf '%s' "$cmd" | sed -nE 's#.*compatibilitytools\.d/([^/]+)/.*#\1#p')
+        [ -n "$oldname" ] || continue
+        [ "$oldname" = "$newname" ] && continue
+        say "stale $oldname wineserver still running — killing (switch to $newname)"
+        pkill -9 -f "compatibilitytools.d/$oldname" 2>/dev/null
+        kill -9 "$pid" 2>/dev/null && killed=1
+    done < <(ps -eo pid=,args= 2>/dev/null)
+    if [ "$killed" = 1 ]; then
+        say "stale Proton services cleared — you can launch the game now."
+    fi
+}
+
 # ----------------------------------------------------------------- DXVK-sarek ---
 # The in-VR overlay background renders as a checker/test pattern when the game
 # runs on a Proton whose D3D11 is stock DXVK. Proton-CachyOS and dwproton carry
@@ -798,6 +825,7 @@ detect_steam_root || {
 }
 detect_game_dir   || die "game '$GAME_SUBDIR' not found in any Steam library"
 pick_proton
+clear_stale_services
 pick_prefix
 detect_vrchat_prefix || warn "VRChat not found in any Steam library — auto-calibration link will be skipped"
 STEAMVR="$STEAM_ROOT/steamapps/common/SteamVR"

@@ -64,6 +64,42 @@ If several Proton builds are installed you'll be asked which one to use.
 Whatever you pick, don't mix builds later without re-running
 `./standable install`.
 
+## Switching Protons
+
+You can use any Proton build, but the driver and game must always agree on
+**the same one** (they share one prefix/wineserver — split wineservers break
+their IPC). To use a different Proton:
+
+1. **Steam** → right-click **Standable** → **Properties** → **Compatibility** →
+   check "Force the use of a specific Steam Play compatibility tool" → pick a
+   Proton (e.g. `dwproton`).
+2. **Re-run `./standable install`**. This re-reads Steam's choice and
+   regenerates the launch hooks to match. The installer also clears any stale
+   wineserver still running under the *previous* Proton — that's what silently
+   made "Play" do nothing after a switch before.
+3. **Launch** through Steam as usual.
+
+### Known-good Protons (in-VR background)
+
+The in-VR overlay background renders as a **checker/test pattern** under a
+Proton whose D3D11 is stock DXVK. Only VR-tuned `dxvk-sarek` renders it
+correctly. Protons verified to work out of the box:
+
+- `proton-cachyos-slr`
+- `dwproton`
+- `dwproton-signed`
+
+When you pick one that lacks sarek (plain Proton-GE, Valve stock), `install.sh`
+warns and layers a sarek copy over the prefix automatically — but the renderer
+bytes are then borrowed from one of the known-good Protons, so for the most
+predictable result prefer one of the three above.
+
+### Note on bytes
+
+`dxvk-sarek` builds are **not byte-identical across Protons**. Each ships its
+own build, so switching between the known-good Protons can produce subtly
+different rendering. That's expected; all of them fix the checker pattern.
+
 ## Logging & diagnostics
 
 Every run writes a full transcript to `~/.local/state/standable/install.log`
@@ -86,6 +122,7 @@ terminal output — it bundles everything needed.
   and game must share one Proton build and prefix.
 - Don't change the game's compatibility tool after installing; if you do,
   run `./standable install` again so both sides use the same Proton build.
+  See [Switching Protons](#switching-protons).
 - The installer merges the Standable driver entry into
   `~/.config/openvr/openvrpaths.vrpath` without overwriting any existing
   entries. If you already have custom drivers configured, they will be
