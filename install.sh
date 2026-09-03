@@ -316,7 +316,7 @@ except Exception:
 m = re.search(r'"CompatToolMapping"\s*\{(.*?)\n\}', s, re.S)
 if not m:
     raise SystemExit(1)
-for app in re.finditer(r'"(\d+)"\s*\{(.*?)\n\t\t\}', m.group(1), re.S):
+for app in re.finditer(r'"(\d+)"\s*\{(.*?)\n[ \t]*\}', m.group(1), re.S):
     if app.group(1) == sys.argv[2]:
         n = re.search(r'"name"\s+"([^"]+)"', app.group(2))
         if n:
@@ -376,6 +376,90 @@ pick_proton() {
     PROTON="${CANDS[0]#*|}"
     # sanity: if PROTON is a directory, append /proton
     [ -d "$PROTON" ] && [ -x "$PROTON/proton" ] && PROTON="$PROTON/proton"
+}
+
+# ----------------------------------------------------------------- DXVK-sarek ---
+# The in-VR overlay background renders as a checker/test pattern when the game
+# runs on a Proton whose D3D11 is stock DXVK. Proton-CachyOS and dwproton carry
+# dxvk-sarek, the VR-tuned DXVK fork that renders it correctly. Protons without
+# it (plain GE, Valve stock) can be made to work by layering sarek's DLLs over
+# the prefix ourselves.
+#
+# NOTE: dxvk-sarek builds are NOT byte-identical across Protons. So when we must
+# self-ship (selected Proton lacks sarek) we do NOT grab "whichever" — we prefer
+# a known-good source in a stable order, and warn that the renderer bytes come
+# from a different Proton than the one selected. This is deterministic and
+# explicit, never silent.
+#
+#   proton_has_sarek      -> does the chosen Proton ship dxvk-sarek?
+#   find_sarek_source     -> locate a sarek build, stable preference order
+#   deploy_sarek          -> layer sarek into the prefix
+#   setup_dxvk_sarek      -> decide native-vs-self-ship, and warn accordingly
+
+proton_has_sarek() { # $1 = proton binary path; 0 = has sarek
+    local d="${1%/proton}/files/lib/wine/dxvk-sarek"
+    [ -d "$d" ]
+}
+
+find_sarek_source() { # echo path to files/lib/wine/dxvk-sarek, or 1
+    # Stable preference: the Protons known to carry a well-tested sarek build
+    # first, then any straggler. Keeps self-ship bytes predictable across runs.
+    local preferred
+    for preferred in proton-cachyos-slr dwproton dwproton-signed; do
+        local p="/usr/share/steam/compatibilitytools.d/$preferred/files/lib/wine/dxvk-sarek"
+        [ -d "$p" ] && { echo "$p"; return 0; }
+        p="$STEAM_ROOT/compatibilitytools.d/$preferred/files/lib/wine/dxvk-sarek"
+        [ -d "$p" ] && { echo "$p"; return 0; }
+    done
+    local pot s
+    for pot in /usr/share/steam/compatibilitytools.d/*/ \
+               "$STEAM_ROOT/compatibilitytools.d/"*/; do
+        s="${pot}files/lib/wine/dxvk-sarek"
+        [ -d "$s" ] && { echo "$s"; return 0; }
+    done
+    return 1
+}
+
+deploy_sarek() { # $1 = sarek source dir; 0 = deployed ok
+    local src="$1"
+    mkdir -p "$PFX/drive_c/windows/system32" "$PFX/drive_c/windows/syswow64"
+    for f in d3d11 d3d10core d3d9 d3d8 dxgi ddraw; do
+        [ -f "$src/x86_64-windows/$f.dll" ] && { bak "$PFX/drive_c/windows/system32/$f.dll"; cp -f "$src/x86_64-windows/$f.dll" "$PFX/drive_c/windows/system32/$f.dll"; }
+        [ -f "$src/i386-windows/$f.dll"    ] && { bak "$PFX/drive_c/windows/syswow64/$f.dll";   cp -f "$src/i386-windows/$f.dll"    "$PFX/drive_c/windows/syswow64/$f.dll"; }
+    done
+    # force Wine to prefer the prefix-native (sarek) build for these dlls
+    STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
+        timeout 120 "$PROTON" run reg add 'HKCU\Software\Wine\DllOverrides' /f \
+        /v d3d11 /t REG_SZ /d native >/dev/null 2>&1
+    STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
+        timeout 120 "$PROTON" run reg add 'HKCU\Software\Wine\DllOverrides' /f \
+        /v dxgi /t REG_SZ /d native >/dev/null 2>&1
+    return 0
+}
+
+setup_dxvk_sarek() {
+    # Selected Proton carries sarek -> use PROTON_DXVK_SAREK env path, no warning.
+    if proton_has_sarek "$PROTON"; then
+        say "Proton ships dxvk-sarek: in-VR background uses the VR-tuned renderer."
+        return 0
+    fi
+    # Selected Proton lacks sarek. Make the consequence explicit, then decide.
+    warn "Selected Proton ($(basename "$(dirname "$PROTON")")) has NO dxvk-sarek."
+    warn "  In-VR background will render as a checker/test pattern unless we layer"
+    warn "  sarek in ourselves. Known-good Protons that already ship it:"
+    warn "    proton-cachyos-slr, dwproton, dwproton-signed"
+    local ssrc
+    ssrc=$(find_sarek_source)
+    if [ -z "$ssrc" ]; then
+        warn "  Could not find any dxvk-sarek on this system. Install proton-cachyos-slr"
+        warn "  or dwproton (then re-run ./install.sh) to get a working VR background."
+        return 1
+    fi
+    local sname; sname="$(basename "$(dirname "$(dirname "$ssrc")")")"
+    say "Layering dxvk-sarek over the prefix from: $sname"
+    warn "  Note: this sarek build is sourced from $sname, not the selected Proton."
+    warn "  Renderer bytes may differ slightly between Proton versions; this is expected."
+    deploy_sarek "$ssrc"
 }
 
 pick_prefix() {
@@ -755,6 +839,8 @@ PC="$PROTON"; PC="${PC%/proton}/files/lib/wine/x86_64-windows"
 ls "$PC"/vrclient*.dll >/dev/null 2>&1 || die "vrclient dlls not found at $PC"
 bak "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
 cp "$PC"/vrclient*.dll "$PFX/drive_c/vrclient/bin/"
+
+setup_dxvk_sarek || true
 
 # -- VRChat LocalLow link (auto-calibration) ---------------------------------
 # The driver reads VRChat's IK-debug log from %UserProfile%\AppData\LocalLow\VRChat\VRChat\

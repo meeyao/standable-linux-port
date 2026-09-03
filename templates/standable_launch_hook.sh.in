@@ -24,10 +24,48 @@ GAME_DIR="@GAME_DIR@"
 export SteamAppId="@APP_ID@"
 export SteamGameId="@APP_ID@"
 
+# In-VR overlay background renders as a checker/test pattern under stock DXVK.
+# When the Proton that launched us ships dxvk-sarek (VR-tuned DXVK), opt in via
+# PROTON_DXVK_SAREK. When it doesn't (plain GE, Valve stock), we layer sarek's
+# DLLs over the prefix ourselves; Proton re-deploys its own DXVK on each run, so
+# a background loop re-applies the layer just like the s:/VRChat repair loops.
+export PROTON_DXVK_SAREK=1
+
 PFX="$STEAM_COMPAT_DATA_PATH/pfx"
 S_LINK="$PFX/dosdevices/s:"
 S_TARGET="@S_TARGET@"
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
+
+proton_has_sarek() { [ -d "${PROTON%/proton}/files/lib/wine/dxvk-sarek" ]; }
+find_sarek_src() {
+    local preferred p pot s
+    for preferred in proton-cachyos-slr dwproton dwproton-signed; do
+        p="/usr/share/steam/compatibilitytools.d/$preferred/files/lib/wine/dxvk-sarek"
+        [ -d "$p" ] && { echo "$p"; return 0; }
+        p="@STEAM_ROOT@/compatibilitytools.d/$preferred/files/lib/wine/dxvk-sarek"
+        [ -d "$p" ] && { echo "$p"; return 0; }
+    done
+    for pot in /usr/share/steam/compatibilitytools.d/*/ \
+               "@STEAM_ROOT@/compatibilitytools.d/"*/; do
+        [ -d "$pot" ] || continue
+        s="${pot}files/lib/wine/dxvk-sarek"
+        [ -d "$s" ] && { echo "$s"; return 0; }
+    done
+    return 1
+}
+deploy_sarek() {
+    local src="$1"
+    [ -d "$src" ] || return 0
+    mkdir -p "$PFX/drive_c/windows/system32" "$PFX/drive_c/windows/syswow64"
+    for f in d3d11 d3d10core d3d9 d3d8 dxgi ddraw; do
+        [ -f "$src/x86_64-windows/$f.dll" ] && cp -f "$src/x86_64-windows/$f.dll" "$PFX/drive_c/windows/system32/$f.dll" 2>/dev/null
+        [ -f "$src/i386-windows/$f.dll"    ] && cp -f "$src/i386-windows/$f.dll"    "$PFX/drive_c/windows/syswow64/$f.dll"   2>/dev/null
+    done
+}
+if ! proton_has_sarek; then
+    SAREK_SRC="$(find_sarek_src || true)"
+    [ -n "$SAREK_SRC" ] && deploy_sarek "$SAREK_SRC"
+fi
 
 fix_vrchat() {
     local src="@VRCHAT_VRC_DIR@"
@@ -58,6 +96,9 @@ PY
 fix_s
 fix_vrchat
 reenable_driver
+if ! proton_has_sarek && [ -n "${SAREK_SRC:-}" ]; then
+    ( for i in $(seq 20); do sleep 3; deploy_sarek "$SAREK_SRC"; done ) &
+fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
 exec "$PROTON" run "$GAME_DIR/Standable.exe"
