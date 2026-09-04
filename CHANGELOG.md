@@ -41,6 +41,17 @@
   script: it uses a capable host python when available, otherwise runs the
   Soldier runtime's python3.13 through its own dynamic loader (which works
   despite Sniper's older glibc). Works with whatever Proton the user selects.
+- **Proton switching without reinstall**: the launch script now re-reads Steam's
+  forced compat tool (`config.vdf` CompatToolMapping) on every driver boot and
+  switches to it when it resolves, so flipping Proton in Steam's UI takes
+  effect on the next SteamVR boot and the driver can never mismatch the game
+  over the shared prefix. Install-time selection is the fallback (note:
+  `config.vdf` flushes on Steam exit, so a fresh switch may lag one restart).
+  stale-service cleanup (`clear_stale_services`, `clear_foreign_wineservers`)
+  is now scoped to our own prefix via `/proc` environ, so unrelated games
+  using the same Proton build are no longer killed, and built-in Protons
+  under `steamapps/common` are handled too. `--check` reports a
+  deployed-vs-forced mismatch (self-heals at boot, advisory only).
 
 ## v3.0.2
 

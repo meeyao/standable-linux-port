@@ -13,6 +13,68 @@ unset SteamGameId
 export STEAM_COMPAT_DATA_PATH="@COMPAT@"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 PROTON="@PROTON@"
+
+# Proton's launcher is `#!/usr/bin/env python3` but modern Proton builds need
+# Python >= 3.11 (`from typing import Self`); SteamVR runs this driver under
+# the Sniper sandbox, which only ships Python 3.9, so Proton would die on
+# startup and trap SteamVR in its ~21 s watchdog. This script's directory
+# contains a `python3` shim that selects a working interpreter (host python,
+# or the Soldier runtime's python via its own loader), so prepend it for the
+# `python3` heredocs and `$PROTON run` invocations below.
+SCRIPT_DIR="$0"
+case "$SCRIPT_DIR" in
+    */*) SCRIPT_DIR="$(cd "${SCRIPT_DIR%/*}" && pwd)" ;;
+    *) SCRIPT_DIR="$PWD" ;;
+esac
+case ":$PATH:" in
+    *":$SCRIPT_DIR:"*) : ;;
+    *) PATH="$SCRIPT_DIR:$PATH"; export PATH ;;
+esac
+
+# resolve_runtime_proton — honor whatever Proton Steam currently forces on the
+# game, so a switch in Steam's Compatibility UI takes effect on the next
+# SteamVR boot without re-running install (and the driver can never mismatch
+# the game and fight it over the shared prefix). Steam records the compat
+# tool in config.vdf (CompatToolMapping); the install-time PROTON above is
+# the fallback when no forced tool is set, unresolvable, or Steam hasn't
+# flushed config.vdf yet (it writes on exit). Must run before S_TARGET and
+# any `$PROTON` use below.
+resolve_runtime_proton() {
+    local vdf="@STEAM_ROOT@/config/config.vdf" name cand
+    [ -f "$vdf" ] || return 0
+    name=$(python3 - "$vdf" "@APP_ID@" <<'PY' 2>/dev/null
+import re, sys
+try:
+    s = open(sys.argv[1]).read()
+except Exception:
+    raise SystemExit(1)
+m = re.search(r'"CompatToolMapping"\s*\{(.*?)\n\}', s, re.S)
+if not m:
+    raise SystemExit(1)
+for app in re.finditer(r'"(\d+)"\s*\{(.*?)\n[ \t]*\}', m.group(1), re.S):
+    if app.group(1) == sys.argv[2]:
+        n = re.search(r'"name"\s+"([^"]+)"', app.group(2))
+        if n:
+            print(n.group(1)); raise SystemExit(0)
+raise SystemExit(1)
+PY
+) || return 0
+    [ -n "$name" ] || return 0
+    for cand in "@STEAM_ROOT@/compatibilitytools.d/$name/proton" \
+                "/usr/share/steam/compatibilitytools.d/$name/proton" \
+                "@STEAM_ROOT@/steamapps/common/$name/proton" \
+                "@STEAM_ROOT@/steamapps/common/Proton - $name/proton"; do
+        if [ -x "$cand" ] && [ -d "$(dirname "$cand")/files/lib/wine" ]; then
+            if [ "$cand" != "$PROTON" ]; then
+                echo "launch_serverhelper: using Steam-forced Proton $(basename "$(dirname "$cand")") (deployed: $(basename "$(dirname "$PROTON")"))" >&2
+                PROTON="$cand"
+            fi
+            return 0
+        fi
+    done
+    return 0
+}
+resolve_runtime_proton
 S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # Drive convention differs by Proton build: newer Valve Protons manage the
 # s: drive themselves (gamedrive -> Steam PARENT dir, paths like
@@ -28,6 +90,20 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
+# same_prefix — true when pid belongs to THIS prefix: Proton-launched processes
+# inherit STEAM_COMPAT_DATA_PATH in their environment (visible in
+# /proc/<pid>/environ). Scoping kills to our own prefix avoids disrupting
+# unrelated games that happen to use the same Proton build. When the
+# environment can't be read, return true (fail-open: a foreign wineserver
+# holding our prefix would otherwise wedge the driver past the watchdog).
+same_prefix() {
+    local env
+    [ -n "$1" ] || return 0
+    [ -r "/proc/$1/environ" ] || return 0
+    env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | grep -x "STEAM_COMPAT_DATA_PATH=$STEAM_COMPAT_DATA_PATH")
+    [ -n "$env" ]
+}
+
 # clear_foreign_wineservers — the Ignition server must start in the prefix that
 # THIS launch script's Proton owns. If another Proton build was ever launched in
 # the same prefix and left a wineserver (or orphaned wineboot/winedevice/xalia
@@ -36,7 +112,8 @@ fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 # safe mode. Kill any Wine process whose Proton differs from the one we run, so
 # the driver launch is never blocked by cross-Proton prefix contention. Processes
 # from OUR OWN Proton are left untouched (a running game/driver in the same
-# prefix must not be disrupted).
+# prefix must not be disrupted), as are processes from other prefixes (an
+# unrelated game using the same Proton build must not be disrupted either).
 clear_foreign_wineservers() {
     local home_dir home_name pid args pname
     home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
@@ -55,8 +132,12 @@ clear_foreign_wineservers() {
             *) continue ;;
         esac
         [ "$pname" = "$home_name" ] && continue
-        # kill this foreign-proton process and its descendants (the whole family)
-        pkill -9 -f "/$pname/" 2>/dev/null
+        # only our own prefix: a foreign-proton wineserver elsewhere is harmless
+        same_prefix "$pid" || continue
+        # per-pid kill (not pkill by build name): each foreign process in our
+        # prefix is visited by this loop, so no broad pattern is needed and
+        # other prefixes are never touched
+        kill -9 "$pid" 2>/dev/null
     done
 }
 
@@ -94,22 +175,8 @@ PY
     rm -f "/home/nick/.local/share/Steam/config/vrserver_crash_timestamp.txt"
 }
 
-# Proton's launcher is `#!/usr/bin/env python3` but modern Proton builds need
-# Python >= 3.11 (`from typing import Self`); SteamVR runs this driver under
-# the Sniper sandbox, which only ships Python 3.9, so Proton would die on
-# startup and trap SteamVR in its ~21 s watchdog. This script's directory
-# contains a `python3` shim that selects a working interpreter (host python,
-# or the Soldier runtime's python via its own loader), so prepend it for the
-# `$PROTON run` invocations below.
-SCRIPT_DIR="$0"
-case "$SCRIPT_DIR" in
-    */*) SCRIPT_DIR="$(cd "${SCRIPT_DIR%/*}" && pwd)" ;;
-    *) SCRIPT_DIR="$PWD" ;;
-esac
-case ":$PATH:" in
-    *":$SCRIPT_DIR:"*) : ;;
-    *) PATH="$SCRIPT_DIR:$PATH"; export PATH ;;
-esac
+# (SCRIPT_DIR PATH prepend + resolve_runtime_proton already ran near the top,
+# before S_TARGET and any $PROTON use.)
 
 # Auto-calibration: driver reads VRChat's IK log from
 # %UserProfile%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt in its own

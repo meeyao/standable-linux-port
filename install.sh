@@ -345,7 +345,10 @@ pick_proton() {
         PROTON="$PROTON_OVERRIDE"; return 0
     fi
     # Use whatever Proton Steam has forced on the game, so driver and game can't
-    # mismatch (the crash we fixed). Only checked if no install exists yet.
+    # mismatch. Re-checked on every driver boot too (resolve_runtime_proton in
+    # launch_serverhelper.sh), so switching in Steam's UI needs no reinstall —
+    # except config.vdf is flushed on Steam exit, so a fresh switch may lag one
+    # Steam restart; install while Steam runs can therefore read a stale value.
     local forced
     forced=$(steam_forced_proton)
     if [ -n "$forced" ]; then
@@ -385,19 +388,26 @@ pick_proton() {
 # the previous (now-unselected) Proton's wineserver so the switch takes effect
 # cleanly. Same-class fix as the GE version-mismatch hang.
 clear_stale_services() {
-    local newname oldname pid cmd
+    local newname oldname pid cmd penv
     newname=$(basename "$PROTON")
     [ "$newname" = "proton" ] && newname=$(basename "$(dirname "$PROTON")")
     local killed=0
     # ps -o args= yields the full command (may contain spaces); first field is pid
     while read -r pid __rest; do
-        case "$__rest" in *wineserver*) ;; *) continue;; esac
+        case "$__rest" in *wineserver*|*wineboot*|*winedevice*|*xalia*) ;; *) continue;; esac
         cmd="$__rest"
         oldname=$(printf '%s' "$cmd" | sed -nE 's#.*compatibilitytools\.d/([^/]+)/.*#\1#p')
+        [ -n "$oldname" ] || oldname=$(printf '%s' "$cmd" | sed -nE 's#.*steamapps/common/(Proton[^/]*)/.*#\1#p')
         [ -n "$oldname" ] || continue
         [ "$oldname" = "$newname" ] && continue
-        say "stale $oldname wineserver still running — killing (switch to $newname)"
-        pkill -9 -f "compatibilitytools.d/$oldname" 2>/dev/null
+        # only our own prefix: another game using the old build must not be
+        # disrupted (when environ is unreadable, fail open so a stale
+        # wineserver can't block the switch)
+        if [ -r "/proc/$pid/environ" ]; then
+            penv=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep "STEAM_COMPAT_DATA_PATH=.*compatdata/$APP_ID" || true)
+            [ -n "$penv" ] || continue
+        fi
+        say "stale $oldname process in our prefix — killing (switch to $newname)"
         kill -9 "$pid" 2>/dev/null && killed=1
     done < <(ps -eo pid=,args= 2>/dev/null)
     if [ "$killed" = 1 ]; then
@@ -686,6 +696,14 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
         [ -x "$GAME_DIR/bin/linux64/python3" ] \
             && ok "python3 shim deployed (Proton launcher under Sniper sandbox)" \
             || bad "python3 shim missing — re-run install, Proton dies on typing.Self ImportError"
+        if [ -n "$PROTON" ]; then
+            _forced=$(steam_forced_proton 2>/dev/null || true)
+            if [ -n "$_forced" ] && [ "$_forced" != "$PROTON" ]; then
+                warn "Proton differs from Steam-forced ($(basename "$(dirname "$_forced")") vs deployed $(basename "$(dirname "$PROTON")")) — next SteamVR boot auto-switches, no reinstall needed"
+            else
+                ok "Proton matches Steam-forced ($(basename "$(dirname "$PROTON")"))"
+            fi
+        fi
     else
         bad "game '$GAME_SUBDIR' not found in any Steam library"
     fi
