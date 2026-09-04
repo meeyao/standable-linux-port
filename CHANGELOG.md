@@ -41,17 +41,39 @@
   script: it uses a capable host python when available, otherwise runs the
   Soldier runtime's python3.13 through its own dynamic loader (which works
   despite Sniper's older glibc). Works with whatever Proton the user selects.
-- **Proton switching without reinstall**: the launch script now re-reads Steam's
-  forced compat tool (`config.vdf` CompatToolMapping) on every driver boot and
-  switches to it when it resolves, so flipping Proton in Steam's UI takes
-  effect on the next SteamVR boot and the driver can never mismatch the game
-  over the shared prefix. Install-time selection is the fallback (note:
-  `config.vdf` flushes on Steam exit, so a fresh switch may lag one restart).
-  stale-service cleanup (`clear_stale_services`, `clear_foreign_wineservers`)
-  is now scoped to our own prefix via `/proc` environ, so unrelated games
-  using the same Proton build are no longer killed, and built-in Protons
-  under `steamapps/common` are handled too. `--check` reports a
-  deployed-vs-forced mismatch (self-heals at boot, advisory only).
+- **Proton switching without reinstall**: the driver and the launch hook now
+  resolve the running Proton build on every boot via a shared
+  `proton_resolve.sh` snippet. It prefers the prefix's own bookkeeping
+  (`config_info` records the exact build dir Proton itself wrote — real-time,
+  no Steam restart lag), then Steam's forced compat tool (`config.vdf`
+  CompatToolMapping, matched with normalized names so spaces and built-in
+  naming quirks work), then the install-time fallback. Flipping Proton in
+  Steam's UI therefore takes effect on the next launch for both game and
+  driver with no reinstall, and they can never mismatch over the shared
+  prefix. Stale-service cleanup (`clear_stale_services`,
+  `clear_foreign_wineservers`) is scoped to our own prefix via `/proc`
+  environ, so unrelated games using the same Proton build are no longer
+  killed, and built-in Protons under `steamapps/common` are handled too.
+  `--check` reports a deployed-vs-forced mismatch (self-heals at boot,
+  advisory only). Verified end-to-end (prefix creation, server boot, driver
+  load, valid-provider handshake) on proton-cachyos-slr, Proton
+  Experimental, DW-Proton, Proton-CachyOS, Proton-GE, and Proton-GE RTSP —
+  see README's driver-tested table.
+- **Windows-side driver registration hygiene** (`win_vrpath.sh`, run on every
+  driver and game boot): the install used to seed the game's Windows-side
+  `openvrpaths.vrpath` with a Linux game path, which is garbage under Wine,
+  and stale `S:\` variants from previous Protons piled up next to it. The
+  repair keeps exactly the current Proton's `S:\` entry and drops the rot.
+  Note: this does not stop the game's per-boot dialog (see below) — the game
+  rewrites that file itself on every boot — but it keeps the registration
+  clean for everything that reads it.
+- **Known upstream issue for the game dev**: the game rewrites the
+  Windows-side `external_drivers` with its unix install dir on every boot
+  (Steam API path, unresolvable under Wine) and then fails its own
+  "directory exists" check, popping "the steamVR driver path is missing or
+  incorrect!" every launch. Both buttons proceed in-memory with no disk
+  change, so it always returns. Needs a game-side fix (write a DOS-form
+  path, or skip the check once the driver is loaded).
 
 ## v3.0.2
 

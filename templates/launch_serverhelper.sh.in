@@ -31,50 +31,21 @@ case ":$PATH:" in
     *) PATH="$SCRIPT_DIR:$PATH"; export PATH ;;
 esac
 
-# resolve_runtime_proton — honor whatever Proton Steam currently forces on the
-# game, so a switch in Steam's Compatibility UI takes effect on the next
-# SteamVR boot without re-running install (and the driver can never mismatch
-# the game and fight it over the shared prefix). Steam records the compat
-# tool in config.vdf (CompatToolMapping); the install-time PROTON above is
-# the fallback when no forced tool is set, unresolvable, or Steam hasn't
-# flushed config.vdf yet (it writes on exit). Must run before S_TARGET and
-# any `$PROTON` use below.
-resolve_runtime_proton() {
-    local vdf="@STEAM_ROOT@/config/config.vdf" name cand
-    [ -f "$vdf" ] || return 0
-    name=$(python3 - "$vdf" "@APP_ID@" <<'PY' 2>/dev/null
-import re, sys
-try:
-    s = open(sys.argv[1]).read()
-except Exception:
-    raise SystemExit(1)
-m = re.search(r'"CompatToolMapping"\s*\{(.*?)\n\}', s, re.S)
-if not m:
-    raise SystemExit(1)
-for app in re.finditer(r'"(\d+)"\s*\{(.*?)\n[ \t]*\}', m.group(1), re.S):
-    if app.group(1) == sys.argv[2]:
-        n = re.search(r'"name"\s+"([^"]+)"', app.group(2))
-        if n:
-            print(n.group(1)); raise SystemExit(0)
-raise SystemExit(1)
-PY
-) || return 0
-    [ -n "$name" ] || return 0
-    for cand in "@STEAM_ROOT@/compatibilitytools.d/$name/proton" \
-                "/usr/share/steam/compatibilitytools.d/$name/proton" \
-                "@STEAM_ROOT@/steamapps/common/$name/proton" \
-                "@STEAM_ROOT@/steamapps/common/Proton - $name/proton"; do
-        if [ -x "$cand" ] && [ -d "$(dirname "$cand")/files/lib/wine" ]; then
-            if [ "$cand" != "$PROTON" ]; then
-                echo "launch_serverhelper: using Steam-forced Proton $(basename "$(dirname "$cand")") (deployed: $(basename "$(dirname "$PROTON")"))" >&2
-                PROTON="$cand"
-            fi
-            return 0
-        fi
-    done
-    return 0
-}
-resolve_runtime_proton
+# Pick whatever Proton the game is actually running under right now, so a
+# switch in Steam's Compatibility UI takes effect on the next SteamVR boot
+# with no reinstall (and the driver can never mismatch the game and fight it
+# over the shared prefix). proton_resolve() prefers the prefix's own
+# bookkeeping (real-time), then Steam's forced tool, then the install-time
+# PROTON above. Must run before S_TARGET and any `$PROTON` use below.
+if [ -f "$SCRIPT_DIR/proton_resolve.sh" ]; then
+    . "$SCRIPT_DIR/proton_resolve.sh"
+    _R=$(proton_resolve "$STEAM_COMPAT_DATA_PATH" "@STEAM_ROOT@" "@APP_ID@" "$PROTON" 2>/dev/null)
+    if [ -n "$_R" ] && [ "$_R" != "$PROTON" ]; then
+        echo "launch_serverhelper: using Proton $(basename "$(dirname "$_R")") (deployed: $(basename "$(dirname "$PROTON")"))" >&2
+        PROTON="$_R"
+    fi
+    unset _R
+fi
 S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # Drive convention differs by Proton build: newer Valve Protons manage the
 # s: drive themselves (gamedrive -> Steam PARENT dir, paths like
@@ -172,10 +143,10 @@ if changed:
 PY
     # The crash-timestamp file is SteamVR's safe-mode trigger; drop it so a
     # fresh session isn't treated as a repeat of the previous abort.
-    rm -f "/home/nick/.local/share/Steam/config/vrserver_crash_timestamp.txt"
+    rm -f "@STEAM_ROOT@/config/vrserver_crash_timestamp.txt"
 }
 
-# (SCRIPT_DIR PATH prepend + resolve_runtime_proton already ran near the top,
+# (SCRIPT_DIR PATH prepend + Proton resolution already ran near the top,
 # before S_TARGET and any $PROTON use.)
 
 # Auto-calibration: driver reads VRChat's IK log from
@@ -201,6 +172,11 @@ clear_foreign_wineservers
 fix_s
 fix_vrchat
 fix_steamvr_state
+# Repair the game's Windows-side driver registration: drop Linux paths and
+# stale-convention S:\ variants so the registration stays clean.
+if [ -x "$SCRIPT_DIR/win_vrpath.sh" ]; then
+    "$SCRIPT_DIR/win_vrpath.sh" "$STEAM_COMPAT_DATA_PATH/pfx" "$(cd "$SCRIPT_DIR/../.." && pwd)" "$S_TARGET"
+fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
 exec "$PROTON" run "$@"

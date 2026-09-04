@@ -7,15 +7,26 @@
 # game never reaches SteamVR). %command% is ignored: we always launch
 # $GAME_DIR/Standable.exe ourselves.
 #
-# NOTE: s: convention is baked at install time from the Proton the installer
-# picked. The game exe path and Proton are baked too, so nothing is re-detected
-# at runtime.
+# NOTE: the Proton build and s: convention are resolved at runtime (see
+# below), so switching Proton in Steam's Compatibility UI takes effect on
+# the next launch with no reinstall. Only the game exe path is baked.
 
 STEAM_COMPAT_DATA_PATH="@COMPAT@"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH
 PROTON="@PROTON@"
 GAME_DIR="@GAME_DIR@"
+
+# Run under whatever Proton the game is actually using right now (same
+# shared resolver as the driver shim): the prefix's own bookkeeping first
+# (the outer Steam proton run just updated it), then Steam's forced tool,
+# then the install-time PROTON above.
+if [ -f "$GAME_DIR/bin/linux64/proton_resolve.sh" ]; then
+    . "$GAME_DIR/bin/linux64/proton_resolve.sh"
+    _R=$(proton_resolve "$STEAM_COMPAT_DATA_PATH" "@STEAM_ROOT@" "@APP_ID@" "$PROTON" 2>/dev/null)
+    [ -n "$_R" ] && PROTON="$_R"
+    unset _R
+fi
 
 # We launch via bare $PROTON run (sharing the driver's wineserver), which
 # bypasses Steam's launcher that normally exports these. The game's Steamworks
@@ -33,7 +44,16 @@ export PROTON_DXVK_SAREK=1
 
 PFX="$STEAM_COMPAT_DATA_PATH/pfx"
 S_LINK="$PFX/dosdevices/s:"
-S_TARGET="@S_TARGET@"
+# s: convention follows the RUNNING Proton (recomputed: newer Valve Protons
+# manage s: themselves via get_validated_steamapps_parent, older forks map it
+# to steamapps). S_ROOT is the game library root (grandparent of GAME_DIR).
+S_ROOT="$(cd "$GAME_DIR/../.." 2>/dev/null && pwd)"
+[ -n "$S_ROOT" ] || S_ROOT="@STEAM_ROOT@"
+if grep -q 'get_validated_steamapps_parent' "${PROTON%/proton}/proton" 2>/dev/null; then
+    S_TARGET="$S_ROOT"
+else
+    S_TARGET="$S_ROOT/steamapps"
+fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
 proton_has_sarek() { [ -d "${PROTON%/proton}/files/lib/wine/dxvk-sarek" ]; }
@@ -96,6 +116,11 @@ PY
 fix_s
 fix_vrchat
 reenable_driver
+# Keep the Windows-side driver registration clean (drops Linux paths and
+# stale-convention S:\ variants the game otherwise accumulates).
+if [ -x "$GAME_DIR/bin/linux64/win_vrpath.sh" ]; then
+    "$GAME_DIR/bin/linux64/win_vrpath.sh" "$PFX" "$GAME_DIR" "$S_TARGET"
+fi
 if ! proton_has_sarek && [ -n "${SAREK_SRC:-}" ]; then
     ( for i in $(seq 20); do sleep 3; deploy_sarek "$SAREK_SRC"; done ) &
 fi

@@ -1,0 +1,82 @@
+#!/bin/bash
+# proton_resolve — pick the Proton build to run right now.
+# Sourced (not executed) by launch_serverhelper.sh and
+# standable_launch_hook.sh. Prints a proton script path on stdout.
+#
+# Usage: proton_resolve <compat_dir> <steam_root> <app_id> <fallback_proton>
+#
+# Order (first valid wins):
+#  1. The prefix's own bookkeeping (<compat_dir>/config_info): Proton records
+#     the exact build dir that last maintained the prefix. Written by Proton
+#     itself before the game/driver start, so it always reflects the build
+#     Steam actually launched with — no Steam restart lag, no reinstall.
+#  2. Steam's forced compat tool (config.vdf CompatToolMapping), matched
+#     against installed builds with normalized names (handles spaces and
+#     built-in naming quirks). May lag one Steam restart (config.vdf flush).
+#  3. The install-time fallback.
+# Only paths that are executable with a wine tree are printed; nothing is
+# printed on total failure (caller keeps its previous value).
+proton_resolve() {
+    local compat="$1" root="$2" appid="$3" fallback="$4"
+    local ci_dir cand norm forced d n
+    # 1. prefix bookkeeping — exact build dir, real-time
+    if [ -f "$compat/config_info" ]; then
+        ci_dir=$(sed -nE 's#^(.*)/(compatibilitytools\.d|steamapps/common)/([^/]+)/files/.*#\1/\2/\3#p' "$compat/config_info" 2>/dev/null | head -1)
+        if [ -n "$ci_dir" ]; then
+            cand="$ci_dir/proton"
+            if [ -x "$cand" ] && [ -d "$ci_dir/files/lib/wine" ]; then
+                printf '%s' "$cand"
+                return 0
+            fi
+        fi
+    fi
+    # 2. Steam-forced tool, normalized matching
+    if [ -f "$root/config/config.vdf" ]; then
+        forced=$(python3 - "$root/config/config.vdf" "$appid" <<'PY' 2>/dev/null
+import re, sys
+try:
+    s = open(sys.argv[1]).read()
+except Exception:
+    raise SystemExit(1)
+m = re.search(r'"CompatToolMapping"\s*\{(.*?)\n\}', s, re.S)
+if not m:
+    raise SystemExit(1)
+for app in re.finditer(r'"(\d+)"\s*\{(.*?)\n[ \t]*\}', m.group(1), re.S):
+    if app.group(1) == sys.argv[2]:
+        n = re.search(r'"name"\s+"([^"]+)"', app.group(2))
+        if n:
+            print(n.group(1)); raise SystemExit(0)
+raise SystemExit(1)
+PY
+) || forced=""
+        if [ -n "$forced" ]; then
+            for cand in "$root/compatibilitytools.d/$forced/proton" \
+                        "/usr/share/steam/compatibilitytools.d/$forced/proton"; do
+                if [ -x "$cand" ] && [ -d "$(dirname "$cand")/files/lib/wine" ]; then
+                    printf '%s' "$cand"
+                    return 0
+                fi
+            done
+            norm=$(printf '%s' "$forced" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+            for d in "$root"/compatibilitytools.d/*/ \
+                     /usr/share/steam/compatibilitytools.d/*/ \
+                     "$root"/steamapps/common/Proton*/; do
+                d="${d%/}"
+                [ -f "$d/proton" ] || continue
+                n=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+                [ "$n" = "$norm" ] || continue
+                cand="$d/proton"
+                if [ -x "$cand" ] && [ -d "$d/files/lib/wine" ]; then
+                    printf '%s' "$cand"
+                    return 0
+                fi
+            done
+        fi
+    fi
+    # 3. install-time fallback
+    if [ -n "$fallback" ] && [ -x "$fallback" ]; then
+        printf '%s' "$fallback"
+        return 0
+    fi
+    return 1
+}

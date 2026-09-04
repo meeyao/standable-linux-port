@@ -1,0 +1,60 @@
+#!/bin/bash
+# win_vrpath.sh — repair the game's Windows-side openvrpaths.vrpath.
+# Usage: win_vrpath.sh <prefix_dir> <game_dir> <s_target>
+#
+# The game runs under Wine and reads its driver registration from
+# <prefix>/drive_c/users/*/AppData/Local/openvr/openvrpaths.vrpath — NOT the
+# Linux ~/.config copy. Two things rot its external_drivers list:
+#   * Linux absolute paths (e.g. /home/.../Standable Full Body Estimation),
+#     seeded by older installs — meaningless under Wine, and the game pops a
+#     "steamvr driver path not found" dialog on every boot because of them.
+#   * stale S:\ variants from a previous Proton's s: convention
+#     (S:\common\... vs S:\steamapps\common\...); only the current Proton's
+#     convention resolves.
+# This keeps exactly the current-convention S:\ entry (derived from
+# <game_dir> relative to <s_target>) and drops the rotten Standable entries.
+# Everything else in the file (other apps' drivers, runtime) is untouched.
+# No-op when args or files are missing.
+PFX_DIR="$1"
+GAME_DIR="$2"
+S_TARGET="$3"
+[ -n "$PFX_DIR" ] && [ -n "$GAME_DIR" ] && [ -n "$S_TARGET" ] || exit 0
+python3 - "$PFX_DIR" "$GAME_DIR" "$S_TARGET" <<'PY'
+import glob, json, os, sys
+pfx, game_dir, s_target = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    rel = os.path.relpath(game_dir, s_target)
+except Exception:
+    rel = None
+expected = None
+if rel and not rel.startswith('..'):
+    expected = 'S:\\' + rel.replace('/', '\\')
+paths = glob.glob(os.path.join(
+    pfx, 'drive_c/users/*/AppData/Local/openvr/openvrpaths.vrpath'))
+for p in paths:
+    try:
+        data = json.load(open(p))
+    except Exception:
+        continue
+    ed = data.get('external_drivers') or []
+    new_ed, changed = [], False
+    for e in ed:
+        if 'Standable' not in e:
+            new_ed.append(e)
+            continue
+        if e.startswith('/'):
+            changed = True
+            continue
+        if expected and e != expected and 'S:' in e.upper():
+            changed = True
+            continue
+        new_ed.append(e)
+    if expected and expected not in new_ed:
+        new_ed.insert(0, expected)
+        changed = True
+    if changed:
+        data['external_drivers'] = new_ed
+        json.dump(data, open(p, 'w'), indent=3)
+        print('win_vrpath: repaired %s' % p)
+PY
+exit 0

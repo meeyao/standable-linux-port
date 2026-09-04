@@ -2,11 +2,12 @@
 
 Runs Standable Full Body Estimation on Linux using the game's own Windows
 binaries: driver, GUI window, realtime settings, T-pose calibration.
-No game files are modified.
+The game's own files stay untouched. The patch only adds its own helper
+files next to them.
 
 Based on [Ignition](https://github.com/BnuuySolutions/Ignition) by
-Bnuuy Solutions (MIT), which provides the SteamVR-Proton bridge this patch
-deploys; see `vendor/IGNITION-LICENSE`. This project is licensed under
+Bnuuy Solutions (MIT). It provides the SteamVR-Proton bridge used here;
+see `vendor/IGNITION-LICENSE`. This project is licensed under
 [MIT](LICENSE). Prefer not to use the prebuilt binaries in `vendor/`?
 [BUILDING.md](BUILDING.md) covers hash verification, substituting the
 official upstream release, and building from source.
@@ -25,27 +26,24 @@ cd standable-linux-port
 ./install.sh
 ```
 
-Then launch it through Steam as you would any other title:
+Then launch it through Steam as you would any other title. Plain **Play**
+works. The driver uses the same Proton as the game, so no reinstall is
+needed after switching Proton. Start **SteamVR**, then click **Play** on
+Standable.
 
-1. Right-click **Standable** in Steam → **Properties** → **Launch Options**, set:
-   ```
-   bash ~/bin/standable_launch_hook.sh %command%
-   ```
-2. Start **SteamVR**, then click **Play** on Standable.
+Optional: if the settings background in VR shows a checkerboard pattern,
+set this launch option — right-click **Standable** in Steam →
+**Properties** → **Launch Options**, set:
+```
+bash ~/bin/standable_launch_hook.sh %command%
+```
 
-The launch hook runs the game and driver on the same Proton build over one
-prefix (their IPC depends on a shared wine server) and passes the appid
-context the game's Steam authentication requires.
-
-The game can live on any Steam library (including a secondary/dual-boot drive
-mounted outside the default Steam root); the installer finds it via
-`libraryfolders.vdf` and sets up the Proton prefix and `s:` drive to match.
+The game can be on any Steam library drive. The installer finds it.
 
 ## Compatibility
 
 - Tested with **Steam Link** (on-PC and local network).
-- **WiVRN** is not supported; the SteamVR driver loading path it uses
-  is incompatible with this patch.
+- **WiVRN** does not work with this patch.
 - **ALVR** has not been tested yet.
 - Standable's **mixed tracking** (combining Standable with SlimeVR,
   hardware trackers, etc.) works as it does on Windows.
@@ -58,97 +56,92 @@ mounted outside the default Steam root); the installer finds it via
 | `./standable check` | Verify the installed setup |
 | `./standable uninstall` | Remove everything this patch added |
 | `./standable install --proton PATH` | Use a specific Proton build |
-| `./standable install --build` | Rebuild the Ignition shim from source (`--force` rebuilds even if cached; needs clang/lld/cmake/ninja + Windows SDK via xwin, else prebuilt `vendor/` copies are used) |
+| `./standable install --build` | Rebuild the driver bridge from source (needs dev tools; prebuilt files are used otherwise) |
 
-If several Proton builds are installed you'll be asked which one to use.
-Whatever you pick, don't mix builds later without re-running
-`./standable install`.
+If several Proton builds are installed, the installer asks which one to
+use. That choice is only a fallback. The driver and the game always use
+the Proton picked in Steam, so the two stay in sync.
 
 ## Switching Protons
 
-You can use any Proton build, but the driver and game must always agree on
-**the same one** (they share one prefix/wineserver — split wineservers break
-their IPC). To use a different Proton:
+The driver and the game must always use **the same** Proton. To switch:
 
-1. **Steam** → right-click **Standable** → **Properties** → **Compatibility** →
-   check "Force the use of a specific Steam Play compatibility tool" → pick a
-   Proton (e.g. `dwproton`).
-2. **Re-run `./standable install`**. This re-reads Steam's choice and
-   regenerates the launch hooks to match. The installer also clears any stale
-   wineserver still running under the *previous* Proton — that's what silently
-   made "Play" do nothing after a switch before.
-3. **Launch** through Steam as usual.
+1. In **Steam**, right-click **Standable** → **Properties** →
+   **Compatibility** → force a Proton.
+2. If Steam was already open, **restart Steam**.
+3. **Launch** as usual. No reinstall needed. Both pick up the new Proton
+   on their own.
 
-### Known-good Protons (in-VR background)
+### Driver-tested Proton builds
 
-The in-VR overlay background renders as a **checker/test pattern** under a
-Proton whose D3D11 is stock DXVK. Only VR-tuned `dxvk-sarek` renders it
-correctly. Protons verified to work out of the box:
+Every build below was tested end to end and works. Any normal Proton
+install should work. None were found unstable:
+
+| Proton | Version tested | Result |
+|---|---|---|
+| `proton-cachyos-slr` | cachyos-11.0-20260703-slr | Works |
+| `Proton - Experimental` | experimental-11.0-20260826 | Works |
+| `DW-Proton Latest` | dwproton-11.0-12 | Works |
+| `Proton-CachyOS Latest` | cachyos-11.0-20260703-slr | Works |
+| `Proton-GE Latest` | GE-Proton11-6 | Works |
+| `Proton-GE RTSP Latest` | proton-rtsp-11.0-20260609-3 | Works |
+
+### Render bug: checkerboard settings background
+
+On some Protons, the settings panel background in VR shows a checkerboard
+pattern instead of a plain color. Just a render bug, nothing breaks. These
+Protons already carry the fix:
 
 - `proton-cachyos-slr`
 - `dwproton`
 - `dwproton-signed`
 
-When you pick one that lacks sarek (plain Proton-GE, Valve stock), `install.sh`
-warns and layers a sarek copy over the prefix automatically — but the renderer
-bytes are then borrowed from one of the known-good Protons, so for the most
-predictable result prefer one of the three above.
-
-### Note on bytes
-
-`dxvk-sarek` builds are **not byte-identical across Protons**. Each ships its
-own build, so switching between the known-good Protons can produce subtly
-different rendering. That's expected; all of them fix the checker pattern.
+On other Protons, `install.sh` warns and copies the fix files over by
+itself. Each Proton ships its own copy of the fix, so the look can vary
+slightly between them.
 
 ## Logging & diagnostics
 
 Every run writes a full transcript to `~/.local/state/standable/install.log`
-(`--log FILE` writes there instead). `--diagnose` appends a system dump —
-OS/kernel, GPU/Vulkan, display server, Steam/Proton/game/prefix, SteamVR
-settings, and the vrserver.txt tail — to the same log:
+(`--log FILE` writes there instead). `--diagnose` adds system info to the
+same log:
 
 ```sh
 ./install.sh --diagnose      # or: ./standable check --diagnose
 cat ~/.local/state/standable/install.log
 ```
 
-When filing an issue, attach the `--diagnose` log instead of pasting the
-terminal output — it bundles everything needed.
+When filing an issue, attach the `--diagnose` log instead of pasting
+terminal output. It has everything needed.
 
 ## Important
 
-- Launch the game via Steam with the launch hook set (see Install). Don't run
-  Standable through Steam's plain Play button without the hook — the driver
-  and game must share one Proton build and prefix.
-- Don't change the game's compatibility tool after installing; if you do,
-  run `./standable install` again so both sides use the same Proton build.
-  See [Switching Protons](#switching-protons).
-- The installer merges the Standable driver entry into
-  `~/.config/openvr/openvrpaths.vrpath` without overwriting any existing
-  entries. If you already have custom drivers configured, they will be
-  preserved.
+- Launch the game through Steam. Plain **Play** is enough.
+- The `standable_launch_hook.sh` launch option is optional. It only fixes
+  the checkerboard background pattern. Nothing else needs it.
+  See [Render bug](#render-bug-checkerboard-settings-background).
+- The installer adds the Standable driver entry to
+  `~/.config/openvr/openvrpaths.vrpath` without touching existing entries.
+  Custom drivers stay in place.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install` (deploys `steam_api64.dll`, the driver's Steamworks runtime), then restart SteamVR |
-| Game launches but no GUI | Make sure the launch hook is set and SteamVR is running; check `./standable check` |
-| "Steam authentication failed" dialog | Re-run `./standable install` (the hook exports `SteamAppId`); don't launch the game without the hook |
+| SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install`, then restart SteamVR |
+| Game launches but no GUI | Make sure SteamVR is running; check `./standable check` |
+| "Steam authentication failed" dialog | Launch through Steam, not by starting Standable.exe directly |
 | Sliders don't apply in realtime | Re-run `./standable install`, restart SteamVR |
 | T-pose fails intermittently | Re-run `./standable install` (repairs drive links), restart SteamVR |
 | "no Proton builds found" | Pass `--proton /path/to/proton`, or install any Proton build |
-| Anything else | Open an issue with `--check` output attached |
+| Anything else | Open an issue with `--diagnose` output attached |
 
 ## How it works
 
-SteamVR loads a small Linux shim (`driver_standable.so`) as a native driver.
-The shim spawns Ignition's `ignition_server.exe` under Proton in the game's
-existing prefix, which loads the game's own Windows driver DLL. The game runs
-under that same prefix and Proton build (the launch hook enforces it), so the
-game and driver share a single wine server; the named pipes between them are
-what make settings updates realtime. The installer keeps the prefix's drive
-links alive against Proton's per-launch maintenance passes.
+SteamVR loads a small Linux helper (`driver_standable.so`) as a driver.
+The helper starts the Windows server with Proton inside the game's folder.
+Game and driver pick the same Proton at startup and talk through shared
+memory. That shared link is what makes settings updates instant.
 
 ## Credits
 
