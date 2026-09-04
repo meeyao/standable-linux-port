@@ -1,5 +1,47 @@
 # Changelog
 
+## v3.1.0
+
+- **Respect the user's chosen Proton**: SteamVR's safe-mode state no longer
+  hard-blocks standable across sessions no matter which Proton the game is
+  forced to. When a transient handshake timeout trips SteamVR's ~21 s watchdog
+  and drops the driver into safe mode, the launch script now clears the full
+  block (`driver_standable.blocked_by_safe_mode` in `steamvr.vrsettings` **and**
+  the `vrserver_crash_timestamp.txt` trigger file) before each boot. Previously
+  only `enable`/`enableSafeMode` were cleared, leaving the driver silenced on
+  every subsequent start until the user manually reset safe mode.
+- **Auto-pick the Proton Steam has forced on the game** (`ConfigToolMapping`) so
+  the driver always launches under the same build the user runs the game with;
+  existing installs keep their current Proton rather than being silently
+  switched.
+- **Stale-service cleanup on Proton switches**: killing the previous build's
+  leftover wineserver so a switch doesn't leave the app un-launchable.
+- **Launch-time cross-Proton guard**: if a *different* Proton build ever left a
+  wineserver (or orphaned wineboot/winedevice/xalia clients) holding the shared
+  prefix, it silently blocked the Ignition server from starting — the driven
+  handshake stalled past SteamVR's ~21 s watchdog and crashed into safe mode.
+  The launch script now clears any Wine process owned by a foreign Proton (the
+  configured Proton's own processes are left untouched) before starting the
+   server, so switching/using any Proton can no longer deadlock the driver.
+- **Fixed the recurring 21s watchdog crash**: `steam_api64.dll` was only deployed
+  to `bin/linux64/` (the server's working dir), but the Windows driver DLL that
+  imports it lives in `bin/win64/`. Wine resolves `driver_standable.dll`'s
+  Steamworks dependency from the DLL's own directory, so without a copy beside it
+  the driver failed to load, the IPC handshake never completed, and SteamVR
+  aborted with a ~21 s watchdog timeout (safe-mode crash loop). The installer now
+  deploys `steam_api64.dll` to `bin/win64/` as well, and `--check` verifies both.
+- **Fixed Proton startup crash under SteamVR's Sniper sandbox**: the driver's
+  `launch_serverhelper.sh` invokes `$PROTON run`, and Proton's launcher
+  (`#!/usr/bin/env python3`) needs Python >= 3.11 (`from typing import Self`),
+  but SteamVR loads drivers under the Sniper runtime, which only ships
+  Python 3.9. Proton therefore died instantly with
+  `ImportError: cannot import name 'Self' from 'typing'`, the server never
+  connected, and SteamVR aborted with its ~21 s watchdog (safe-mode loop).
+  The installer now deploys a `python3` interpreter shim next to the launch
+  script: it uses a capable host python when available, otherwise runs the
+  Soldier runtime's python3.13 through its own dynamic loader (which works
+  despite Sniper's older glibc). Works with whatever Proton the user selects.
+
 ## v3.0.2
 
 - **Install on any Steam library**: when the game lives on a secondary drive

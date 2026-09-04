@@ -1,0 +1,52 @@
+#!/bin/bash
+# python3 — interpreter shim so Proton's launcher runs under SteamVR.
+#
+# Proton's `proton` script is `#!/usr/bin/env python3`, and modern Proton
+# builds (GE/cachyos/recent Valve) do `from typing import Self`, which needs
+# Python >= 3.11. SteamVR loads this driver under the Sniper Steam Linux
+# Runtime sandbox, which only ships Python 3.9, so Proton dies on startup
+# with "ImportError: cannot import name 'Self' from 'typing'". The server
+# then never connects and SteamVR aborts with its ~21 s watchdog timeout.
+#
+# This file is deployed as `python3` next to launch_serverhelper.sh, which
+# prepends its own directory to PATH so the proton shebang finds this shim.
+# It selects a working interpreter:
+#   1. a real python3 on PATH that already supports typing.Self (host case);
+#   2. the Soldier runtime's python3.13, executed through its own dynamic
+#      loader so it runs despite Sniper's older glibc (sandbox case);
+#   3. last resort: whatever python3 remains (previous behavior).
+ME0="$0"
+case "$ME0" in
+    */*) ME_DIR="$(cd "${ME0%/*}" && pwd)" ;;
+    *) ME_DIR="$PWD" ;;
+esac
+CLEAN_PATH=""
+_OIFS="$IFS"; IFS=:
+for _d in ${PATH:-/usr/bin:/bin}; do
+    [ -n "$_d" ] || continue
+    [ "$_d" = "$ME_DIR" ] && continue
+    if [ -z "$CLEAN_PATH" ]; then CLEAN_PATH="$_d"; else CLEAN_PATH="$CLEAN_PATH:$_d"; fi
+done
+IFS="$_OIFS"
+REAL=""
+_OIFS="$IFS"; IFS=:
+for _d in ${CLEAN_PATH:-/usr/bin:/bin}; do
+    if [ -x "$_d/python3" ]; then REAL="$_d/python3"; break; fi
+done
+IFS="$_OIFS"
+if [ -n "$REAL" ] && "$REAL" -c 'from typing import Self' >/dev/null 2>&1; then
+    exec "$REAL" "$@"
+fi
+for _root in "@STEAM_ROOT@" "/run/host@STEAM_ROOT@"; do
+    for _plat in "$_root"/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files; do
+        _py="$_plat/bin/python3.13"
+        _ld="$_plat/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+        _libs="$_plat/lib/x86_64-linux-gnu:$_plat/lib"
+        [ -x "$_py" ] && [ -x "$_ld" ] || continue
+        if "$_ld" --library-path "$_libs" "$_py" -c 'from typing import Self' >/dev/null 2>&1; then
+            exec "$_ld" --library-path "$_libs" "$_py" "$@"
+        fi
+    done
+done
+PATH="$CLEAN_PATH"; export PATH
+exec python3 "$@"

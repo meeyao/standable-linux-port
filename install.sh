@@ -680,9 +680,12 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
     [ -x "$HOME/bin/standable_launch_hook.sh" ] && ok "~/bin/standable_launch_hook.sh installed" || bad "Steam launch hook missing"
     if [ "$GAME_FOUND" = 1 ]; then
-        [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] \
-            && ok "steam_api64.dll deployed (driver's Steamworks dep)" \
+        [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] && [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ] \
+            && ok "steam_api64.dll deployed (driver's Steamworks dep, linux64+win64)" \
             || bad "steam_api64.dll missing — re-run install, SteamVR crashes on driver load"
+        [ -x "$GAME_DIR/bin/linux64/python3" ] \
+            && ok "python3 shim deployed (Proton launcher under Sniper sandbox)" \
+            || bad "python3 shim missing — re-run install, Proton dies on typing.Self ImportError"
     else
         bad "game '$GAME_SUBDIR' not found in any Steam library"
     fi
@@ -809,6 +812,8 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -fv "$PFX/dosdevices/s:"
     rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
     rm -fv "$GAME_DIR/bin/linux64/steam_api64.dll"
+    rm -fv "$GAME_DIR/bin/win64/steam_api64.dll"
+    rm -fv "$GAME_DIR/bin/linux64/python3"
     say "Restored files are next to the modified ones (*.bak-*). vrpath seeds and"
     say "the SteamPath registry key were left alone , see RESTORE.md to strip them."
     exit 0
@@ -963,8 +968,11 @@ cp "$IGN_LINUX64/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
 # Steamworks runtime requirement of the Windows driver. driver_standable.dll
 # imports steam_api64.dll (SteamAPI_* init); without it ignition_server.exe
 # fails to load the driver, the handshake never completes and SteamVR aborts
-# with a ~21s watchdog timeout (safe-mode crash loop). bin/linux64 is the
-# Ignition server's working dir and is on Wine's DLL search path.
+# with a ~21s watchdog timeout (safe-mode crash loop).
+# The Windows driver DLL lives in bin/win64/, and Wine's loader (with
+# LOAD_WITH_ALTERED_SEARCH_PATH) resolves driver_standable.dll's imports from
+# ITS OWN directory first — so steam_api64.dll MUST sit beside it in bin/win64/.
+# bin/linux64 is the Ignition server's working dir, so it also gets a copy.
 # The game does NOT ship steam_api64.dll (fresh installs only have
 # driver_standable.dll in bin/win64), so source it from the user's own Steam
 # library: another game that ships it (VRChat is the most likely; it's already
@@ -972,6 +980,8 @@ cp "$IGN_LINUX64/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
 bak "$GAME_DIR/bin/linux64/steam_api64.dll"
 resolve_steam_api64
 cp "$SA64_SRC" "$GAME_DIR/bin/linux64/"
+bak "$GAME_DIR/bin/win64/steam_api64.dll"
+cp "$SA64_SRC" "$GAME_DIR/bin/win64/"
 say "copied steam_api64.dll from $(basename "$(dirname "$SA64_SRC")")"
 
 # glibc compat check: warn early if the .so won't load on this system
@@ -998,6 +1008,13 @@ mkdir -p "$HOME/bin"
 bak "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
+# python3 interpreter shim: Proton's launcher needs Python >= 3.11 but
+# SteamVR runs this driver under the Sniper sandbox (Python 3.9 only).
+# launch_serverhelper.sh prepends its own dir to PATH so `env python3`
+# resolves to this shim. Must be named exactly `python3`.
+bak "$GAME_DIR/bin/linux64/python3"
+gen proton_python.sh.in "$GAME_DIR/bin/linux64/python3"
+chmod +x "$GAME_DIR/bin/linux64/python3"
 gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
 # retire legacy GUI launcher from older installs
 rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/Standable GUI.desktop" "$HOME/Desktop/standable-gui.desktop"
