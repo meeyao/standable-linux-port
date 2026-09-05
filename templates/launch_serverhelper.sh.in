@@ -10,9 +10,18 @@
 
 unset SteamGameId
 
+# Trace the driver-server launch: which Proton was chosen, what foreign Wine
+# processes were found/killed, and whether ignition_server.exe actually ran.
+# This is what the 21s load_drivers watchdog can't tell us — the server never
+# gets to report back, so we log our side of the handshake.
+HELPER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.log"
+mkdir -p "$(dirname "$HELPER_LOG")"
+logh() { printf '%s %s\n' "$(date -Iseconds)" "$*" >> "$HELPER_LOG"; }
+
 export STEAM_COMPAT_DATA_PATH="@COMPAT@"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 PROTON="@PROTON@"
+logh "=== launch args: $*"
 
 # Proton's launcher is `#!/usr/bin/env python3` but modern Proton builds need
 # Python >= 3.11 (`from typing import Self`); SteamVR runs this driver under
@@ -46,6 +55,8 @@ if [ -f "$SCRIPT_DIR/proton_resolve.sh" ]; then
     fi
     unset _R
 fi
+logh "proton: $PROTON"
+logh "wineservers before sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
 S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # Drive convention differs by Proton build: newer Valve Protons manage the
 # s: drive themselves (gamedrive -> Steam PARENT dir, paths like
@@ -179,6 +190,7 @@ fix_vrchat() {
 # Free the prefix of any foreign-Proton leftover wineserver BEFORE we touch it:
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers
+logh "wineservers after sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
 "$PROTON" run reg import ./wine_psvr2_hidraw.reg >/dev/null 2>&1 &
 
 fix_s
@@ -191,4 +203,7 @@ if [ -x "$SCRIPT_DIR/win_vrpath.sh" ]; then
 fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
-exec "$PROTON" run "$@"
+"$PROTON" run "$@"
+_code=$?
+logh "server exit: $_code"
+exit $_code
