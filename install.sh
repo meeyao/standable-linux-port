@@ -3,15 +3,15 @@
 # Repo: https://github.com/meeyao/standable-linux-port
 #
 #   ./install.sh              install / repair (idempotent)
-#   ./install.sh --check      doctor: verify a running setup
+#   ./install.sh --check      doctor: verify a running setup + full system dump
 #   ./install.sh --uninstall  remove everything this script added
 #   ./install.sh --build      rebuild the Ignition shim from source
 #                          (--force to rebuild even if cached; needs
 #                          clang/lld/cmake/ninja + Windows SDK via xwin,
 #                          else falls back to prebuilt vendor/ copies)
 #   Every run is logged to ~/.local/state/standable/install.log
-#   (--log FILE writes there instead). --diagnose appends a full system
-#   dump to the log for sharing when filing issues.
+#   (--log FILE writes there instead). --check appends a full system dump to
+#   the log for sharing when filing issues; --diagnose is a deprecated alias.
 #
 # Works with any host-launchable Proton build. Tested on Arch Linux.
 
@@ -518,6 +518,8 @@ _log "pwd: $PWD  user: $(id -un)  kernel: $(uname -r)"
 
 # ================================================================== DOCTOR ==
 if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
+    # --check now always dumps full system info to the log (used to be the
+    # separate --diagnose flag). --diagnose is kept as an alias for compat.
     detect_steam_root || die "Steam root not found"
     if detect_game_dir; then
         GAME_FOUND=1
@@ -537,6 +539,15 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     fail=0
     ok(){ say "OK  $1"; }
     bad(){ warn "FAIL $1"; fail=1; }
+    # SteamVR version + branch: "worked yesterday, broke today" across users is
+    # often a SteamVR-side update. Surface it so a version correlation is
+    # visible without digging into --diagnose.
+    _vrver=$(python3 -c "import json; print(json.load(open('$STEAM_ROOT/config/steamvr.vrsettings')).get('steamvr',{}).get('lastVersionNotice',''))" 2>/dev/null)
+    if [ -n "$_vrver" ]; then
+        _vrbranch="stable"
+        [ -f "$STEAM_ROOT/package/beta" ] && grep -qi "publicbeta" "$STEAM_ROOT/package/beta" 2>/dev/null && _vrbranch="beta"
+        say "SteamVR $_vrver ($_vrbranch)"
+    fi
     [ -f "$PFX/drive_c/vr_bootstrap.exe" ] && ok "vr_bootstrap.exe deployed" || bad "vr_bootstrap.exe missing"
     [ -f "$PFX/drive_c/vrclient/bin/vrclient_x64.dll" ] && ok "vrclient copy present" || bad "vrclient copy missing"
     VRPATH="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe"
@@ -601,14 +612,61 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
-    [ -x "$HOME/bin/standable_launch_hook.sh" ] && ok "~/bin/standable_launch_hook.sh installed" || bad "Steam launch hook missing"
+    if [ -x "$HOME/bin/standable_launch_hook.sh" ]; then
+        ok "~/bin/standable_launch_hook.sh installed"
+        # A stale hook (pre-host-context) still exists+is executable, but chains
+        # %command% or runs the old direct path wrong — desktop GUI never shows.
+        # Verify it's the current host-context launcher.
+        if grep -q 'exec "\$PROTON" run "\$GAME_DIR/Standable.exe"' "$HOME/bin/standable_launch_hook.sh" \
+           || grep -q '"$PROTON" run "$GAME_DIR/Standable.exe"' "$HOME/bin/standable_launch_hook.sh"; then
+            ok "launch hook is the host-context (desktop GUI) version"
+        else
+            bad "launch hook is stale (not host-context) — re-run ./standable install, desktop GUI won't show"
+        fi
+    else
+        bad "Steam launch hook missing"
+    fi
     if [ "$GAME_FOUND" = 1 ]; then
         [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] && [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ] \
             && ok "steam_api64.dll deployed (driver's Steamworks dep, linux64+win64)" \
             || bad "steam_api64.dll missing — re-run install, SteamVR crashes on driver load"
-        [ -x "$GAME_DIR/bin/linux64/python3" ] \
-            && ok "python3 shim deployed (Proton launcher under Sniper sandbox)" \
-            || bad "python3 shim missing — re-run install, Proton dies on typing.Self ImportError"
+        if [ -x "$GAME_DIR/bin/linux64/python3" ]; then
+            # Actually exercise the shim: Proton dies on startup if it can't
+            # resolve a python with typing.Self (Sniper sandbox ships 3.9).
+            # "deployed" ≠ "works" — run it so a broken interpreter selection
+            # is caught here, not as a ~21s load_drivers watchdog later.
+            if "$GAME_DIR/bin/linux64/python3" -c 'from typing import Self' >/dev/null 2>&1; then
+                ok "python3 shim resolves a working interpreter (typing.Self)"
+            else
+                # Find what's actually missing so the fix is precise, not a
+                # generic "install something".
+                if ! command -v python3 >/dev/null 2>&1; then
+                    warn "host has no python3 — install one or Steam Linux Runtime 4.0"
+                elif ! python3 -c 'from typing import Self' >/dev/null 2>&1; then
+                    warn "host python3 lacks typing.Self — needs Steam Linux Runtime 4.0's python3.13"
+                fi
+                local _rt4py=""
+                for _rt4 in "$STEAM_ROOT"/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files/bin/python3.13; do
+                    [ -x "$_rt4" ] && { _rt4py="$_rt4"; break; }
+                done
+                if [ -n "$_rt4py" ]; then
+                    warn "Steam Linux Runtime 4.0 present but its python3.13 wasn't reached — shim logic issue"
+                else
+                    bad "Steam Linux Runtime 4.0 missing (provides python3.13 the shim needs)"
+                    # Offer the fix: trigger the install through Steam if it's
+                    # running, else tell the user the command.
+                    if pgrep -f 'steam\.sh' >/dev/null 2>&1; then
+                        warn "triggering Steam install of Steam Linux Runtime 4.0 (appid 4183110)…"
+                        ( steam steam://install/4183110 >/dev/null 2>&1 & )
+                        warn "after it finishes, re-run ./standable check"
+                    else
+                        warn "fix: install Steam Linux Runtime 4.0, e.g. 'steam steam://install/4183110'"
+                    fi
+                fi
+            fi
+        else
+            bad "python3 shim missing — re-run install, Proton dies on typing.Self ImportError"
+        fi
         [ -f "$GAME_DIR/bin/linux64/proton_resolve.sh" ] \
             && ok "proton_resolve.sh deployed (runtime Proton switching)" \
             || bad "proton_resolve.sh missing — re-run install, Proton switches need reinstalls"
@@ -680,9 +738,8 @@ PY
             ok "no SteamVR 307 / compositor failure signature in vrserver.txt"
         fi
     fi
-    # --diagnose: dump system info + check output to a file for sharing.
-    if [ -n "$DIAGNOSE" ]; then
-        {
+    # --check always appends the full system dump to the log for sharing.
+    {
             echo ""
             echo "--- system ---"
             uname -a
@@ -705,13 +762,41 @@ PY
             echo ""
             echo "--- display server ---"
             echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unset}"
+            echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-unset}"
+            echo "XDG_SESSION_DESKTOP=${XDG_SESSION_DESKTOP:-unset}"
             echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
             echo "DISPLAY=${DISPLAY:-unset}"
+            echo ""
+            echo "--- nvidia ---"
+            if command -v nvidia-smi >/dev/null 2>&1; then
+                nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -2 || echo "(nvidia-smi failed)"
+            elif command -v nvidia-settings >/dev/null 2>&1; then
+                nvidia-settings --version 2>/dev/null | head -1 || echo "(nvidia-settings)"
+            else
+                echo "(no nvidia tools)"
+            fi
+            echo ""
+            echo "--- headset (usb) ---"
+            lsusb 2>/dev/null | grep -iE "valve|holographic|index|vive|oculus|meta|psvr|playstation|windows mixed|hp |dell |reverb" || echo "(no headset usb device found)"
+            echo ""
+            echo "--- steamvr drivers ---"
+            ls "$STEAM_ROOT/steamapps/common/SteamVR/drivers/" 2>/dev/null | grep -vE "^\s*$" || echo "(none)"
+            echo ""
+            echo "--- alvr ---"
+            if ls -d "$HOME/.local/share/ALVR-Launcher"* "$HOME/.local/share/ALVR"* 2>/dev/null | head -1 >/dev/null; then
+                ls -d "$HOME/.local/share/ALVR-Launcher"* "$HOME/.local/share/ALVR"* 2>/dev/null | head -3
+                pgrep -a alvr 2>/dev/null | head -3 || echo "(alvr not running)"
+            else
+                echo "(not installed)"
+            fi
             echo ""
             echo "--- steam ---"
             echo "STEAM_ROOT=$STEAM_ROOT"
             if [ -f "$STEAM_ROOT/package.txt" ]; then
                 echo "steam package: $(cat "$STEAM_ROOT/package.txt" 2>/dev/null)"
+            fi
+            if [ -f "$STEAM_ROOT/package/beta" ]; then
+                echo "steam branch: $(cat "$STEAM_ROOT/package/beta" 2>/dev/null)"
             fi
             if [ -d "$STEAM_ROOT/steamapps/common/SteamVR" ]; then
                 cat "$STEAM_ROOT/steamapps/common/SteamVR/bin/linux64/runtime_resource.vrmanifest" 2>/dev/null \
@@ -757,13 +842,21 @@ print(f'driver_standable.enable = {dr.get(\"enable\", \"(unset)\")}')
             echo "--- wineserver ---"
             pgrep -a wineserver 2>/dev/null || echo "(none)"
             echo ""
-            echo "--- vrserver.txt (last 20 lines) ---"
-            tail -20 "$STEAM_ROOT/logs/vrserver.txt" 2>/dev/null || echo "(not found)"
+            echo "--- vrserver.txt: crash signatures ---"
+            grep -aiE "watchdog|abort|segfault|HmdNotFound|Refusing|Failed to (load|send|connect)|Error.*\b30[0-9]\b" "$STEAM_ROOT/logs/vrserver.txt" 2>/dev/null | tail -15 || echo "(none)"
+            echo ""
+            echo "--- vrserver.previous.txt: crash signatures ---"
+            grep -aiE "watchdog|abort|segfault|HmdNotFound|Refusing|Failed to (load|send|connect)|Error.*\b30[0-9]\b" "$STEAM_ROOT/logs/vrserver.previous.txt" 2>/dev/null | tail -15 || echo "(none)"
+            echo ""
+            echo "--- vrcompositor-linux.txt: last 30 lines ---"
+            tail -30 "$STEAM_ROOT/logs/vrcompositor-linux.txt" 2>/dev/null || echo "(not found)"
+            echo ""
+            echo "--- vrserver.txt (last 40 lines) ---"
+            tail -40 "$STEAM_ROOT/logs/vrserver.txt" 2>/dev/null || echo "(not found)"
             echo ""
             echo "--- /check output above ---"
         } >> "$LOG_FILE" 2>&1
-        say "Diagnostics appended to $LOG_FILE — share this file when filing issues"
-    fi
+        say "Full diagnostics appended to $LOG_FILE — share this file when filing issues"
     exit $fail
 fi
 
@@ -1004,5 +1097,5 @@ cat <<EOF
   Verify anytime with:  $REPO/install.sh --check
   Log for this run:     $LOG_FILE
   Build from source:    $REPO/install.sh --build --force
-  Problems?             See README.md (Logging & diagnostics), or re-run with --diagnose.
+  Problems?             See README.md (Logging & diagnostics), or run ./standable check.
 EOF

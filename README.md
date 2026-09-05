@@ -114,16 +114,17 @@ does. If the pattern bothers you, switch to `proton-cachyos-slr`.
 ## Logging & diagnostics
 
 Every run writes a full transcript to `~/.local/state/standable/install.log`
-(`--log FILE` writes there instead). `--diagnose` adds system info to the
-same log:
+(`--log FILE` writes there instead). `./standable check` verifies the setup
+and appends a full system dump (OS, GPU, display server, Steam/Proton/game,
+prefix, SteamVR settings, crash signatures) to the same log:
 
 ```sh
-./install.sh --diagnose      # or: ./standable check --diagnose
+./standable check
 cat ~/.local/state/standable/install.log
 ```
 
-When filing an issue, attach the `--diagnose` log instead of pasting
-terminal output. It has everything needed.
+When filing an issue, attach the log from `./standable check` instead of
+pasting terminal output. It has everything needed.
 
 ## Important
 
@@ -149,10 +150,22 @@ terminal output. It has everything needed.
 
 ## How it works
 
-SteamVR loads a small Linux helper (`driver_standable.so`) as a driver.
-The helper starts the Windows server with Proton inside the game's folder.
-Game and driver pick the same Proton at startup and talk through shared
-memory. That shared link is what makes settings updates instant.
+SteamVR loads a small Linux helper (`driver_standable.so`) as a driver. The
+helper starts the Windows server (`ignition_server.exe`) with Proton inside
+the game's folder, and the game is launched in host context by the launch
+hook so its desktop settings window renders while SteamVR runs. Game and
+driver pick the same Proton at startup and talk through shared memory. That
+shared link is what makes settings updates instant.
+
+The two known failure modes are handled by the installer:
+- Proton needs a modern python (`from typing import Self`) but SteamVR's
+  sandbox ships an older one, so Proton dies before the server starts and
+  SteamVR aborts after ~20 s (Safe Mode). The installer deploys a `python3`
+  shim that resolves a working interpreter; `./standable check` verifies it
+  and offers to install Steam Linux Runtime 4.0 if missing.
+- SteamVR force-aborts shutdown can leave the old Proton's Wine processes
+  orphaned, holding the prefix and blocking the next launch. The launch
+  scripts sweep foreign-Proton processes in our prefix before starting.
 
 ## Credits
 

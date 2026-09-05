@@ -136,4 +136,16 @@ fi
 # the game exits. Direct run shares the same prefix/wineserver as the driver,
 # so their IPC still works. The Steam API still authenticates because the
 # Steam client is running and SteamAppId/SteamGameId are exported above.
-exec "$PROTON" run "$GAME_DIR/Standable.exe"
+# Log the launch (proton chosen + exit) so a dead-on-arrival GUI is traceable
+# without another debug round-trip.
+HOOK_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/hook.log"
+mkdir -p "$(dirname "$HOOK_LOG")"
+{
+    echo "=== $(date -Iseconds) launch ==="
+    echo "proton: $PROTON"
+    echo "game:   $GAME_DIR/Standable.exe"
+} >> "$HOOK_LOG"
+"$PROTON" run "$GAME_DIR/Standable.exe"
+_code=$?
+echo "exit:   $_code ($(date -Iseconds))" >> "$HOOK_LOG"
+exit $_code
