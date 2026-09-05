@@ -105,16 +105,11 @@ if a build launches and closes instantly via Steam, switch back to
 ### Render bug: checkerboard settings background
 
 On some Protons, the settings panel background in VR shows a checkerboard
-pattern instead of a plain color. Just a render bug, nothing breaks. These
-Protons already carry the fix:
-
-- `proton-cachyos-slr`
-- `dwproton`
-- `dwproton-signed`
-
-On other Protons, `install.sh` warns and copies the fix files over by
-itself. Each Proton ships its own copy of the fix, so the look can vary
-slightly between them.
+pattern instead of a plain color. Just a render bug, nothing breaks.
+`proton-cachyos-slr` (the recommended build) renders it correctly. The
+installer used to copy a dxvk-sarek build over the prefix for other Protons,
+but that caused more trouble than the cosmetic fix was worth, so it no longer
+does. If the pattern bothers you, switch to `proton-cachyos-slr`.
 
 ## Logging & diagnostics
 
