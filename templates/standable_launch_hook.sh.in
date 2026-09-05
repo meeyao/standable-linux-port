@@ -86,7 +86,10 @@ clear_foreign_wineservers() {
         [ -z "$pname" ] && continue
         [ "$pname" = "$home_name" ] && continue
         if [ -r "/proc/$pid/environ" ]; then
-            tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qx "STEAM_COMPAT_DATA_PATH=$STEAM_COMPAT_DATA_PATH" || continue
+            # normalize /run/host prefix (Sniper sandbox form) before matching
+            tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+                | grep -qx "STEAM_COMPAT_DATA_PATH=${STEAM_COMPAT_DATA_PATH#/run/host}" || continue
         fi
         kill -9 "$pid" 2>/dev/null
     done

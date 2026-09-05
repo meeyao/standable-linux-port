@@ -67,11 +67,17 @@ fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 # unrelated games that happen to use the same Proton build. When the
 # environment can't be read, return true (fail-open: a foreign wineserver
 # holding our prefix would otherwise wedge the driver past the watchdog).
+# The path is normalized (strip a leading /run/host) because SteamVR's Sniper
+# sandbox can present host paths as /run/host/home/... while we were baked
+# with the plain /home/... form.
 same_prefix() {
-    local env
+    local env want
     [ -n "$1" ] || return 0
     [ -r "/proc/$1/environ" ] || return 0
-    env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | grep -x "STEAM_COMPAT_DATA_PATH=$STEAM_COMPAT_DATA_PATH")
+    want="${STEAM_COMPAT_DATA_PATH#/run/host}"
+    env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null \
+        | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+        | grep -x "STEAM_COMPAT_DATA_PATH=$want")
     [ -n "$env" ]
 }
 
