@@ -6,11 +6,9 @@
 > being validated. Expect rough edges; report issues rather than assuming a
 > regression is intentional.
 >
-> **Development was AI-assisted.** Parts of this codebase were written and
-> debugged with AI tooling (opencode + LLM). Treat the shell scripts and
-> patches as human-reviewed but machine-assisted — review before trusting
-> behavior you care about, especially anything that kills processes or edits
-> config files.
+> Note: some code here was written with the help of an LLM. It's been
+> reviewed, but it's worth a skim before you rely on it — especially anything
+> that kills processes or edits config files.
 
 Runs Standable Full Body Estimation on Linux using the game's own Windows
 binaries: driver, GUI window, realtime settings, T-pose calibration.
@@ -30,11 +28,9 @@ Requires Linux with a native (non-Flatpak) Steam install:
 
 - **Steam** and **SteamVR** installed
 - Standable Full Body Estimation installed (AppId **2370570**)
-- Any Proton build (Steam's bundled Proton works), but builds differ in
-  practice: `proton-cachyos-slr` is the only one verified end to end on the
-  dev machine. Newer GE/RTSP builds need Steam's runtime container — launch
-  via Steam (plain Play or the launch hook, which chains `%command%`); a
-  bare `$PROTON run` bypasses it and they exit on startup.
+- Any Proton build (Steam's bundled Proton works). `proton-cachyos-slr` is
+  the one verified end to end on the dev machine; others work but aren't as
+  battle-tested.
 
 ```sh
 git clone https://github.com/meeyao/standable-linux-port.git
@@ -42,17 +38,18 @@ cd standable-linux-port
 ./install.sh
 ```
 
-Then launch it through Steam as you would any other title. Plain **Play**
-works. The driver uses the same Proton as the game, so no reinstall is
-needed after switching Proton. Start **SteamVR**, then click **Play** on
-Standable.
+Then launch it through Steam as you would any other title. Start **SteamVR**,
+then click **Play** on Standable.
 
-Optional: if the settings background in VR shows a checkerboard pattern,
-set this launch option — right-click **Standable** in Steam →
-**Properties** → **Launch Options**, set:
+To get the settings window on your desktop (instead of only in VR), set the
+launch hook as the game's Launch Options — right-click **Standable** in Steam
+→ **Properties** → **Launch Options**, set:
 ```
 bash ~/bin/standable_launch_hook.sh %command%
 ```
+The hook runs the game in host context so the desktop window renders while
+SteamVR runs, and keeps the game and driver on the same Proton/prefix. Without
+it, Steam launches the game as a VR overlay and there's no desktop window.
 
 The game can be on any Steam library drive. The installer finds it.
 
@@ -135,10 +132,10 @@ terminal output. It has everything needed.
 
 ## Important
 
-- Launch the game through Steam. Plain **Play** is enough.
-- The `standable_launch_hook.sh` launch option is optional. It only fixes
-  the checkerboard background pattern. Nothing else needs it.
-  See [Render bug](#render-bug-checkerboard-settings-background).
+- Launch the game through Steam.
+- Set the launch hook in Steam's Launch Options to get the desktop settings
+  window while SteamVR runs (see Install). It's also what keeps the game and
+  driver on the same Proton/prefix.
 - The installer adds the Standable driver entry to
   `~/.config/openvr/openvrpaths.vrpath` without touching existing entries.
   Custom drivers stay in place.
