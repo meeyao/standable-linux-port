@@ -18,7 +18,11 @@ Requires Linux with a native (non-Flatpak) Steam install:
 
 - **Steam** and **SteamVR** installed
 - Standable Full Body Estimation installed (AppId **2370570**)
-- Any Proton build (Steam's bundled Proton works)
+- Any Proton build (Steam's bundled Proton works), but builds differ in
+  practice: `proton-cachyos-slr` is the only one verified end to end on the
+  dev machine. Newer GE/RTSP builds need Steam's runtime container — launch
+  via Steam (plain Play or the launch hook, which chains `%command%`); a
+  bare `$PROTON run` bypasses it and they exit on startup.
 
 ```sh
 git clone https://github.com/meeyao/standable-linux-port.git
@@ -74,8 +78,11 @@ The driver and the game must always use **the same** Proton. To switch:
 
 ### Driver-tested Proton builds
 
-Every build below was tested end to end and works. Any normal Proton
-install should work. None were found unstable:
+`proton-cachyos-slr` is verified end to end on the dev machine. The rest
+below launched in CI/manual checks but are not guaranteed on every setup —
+if a build launches and closes instantly via Steam, switch back to
+`proton-cachyos-slr` (Steam → Properties → Compatibility) and re-run
+`./install.sh`:
 
 | Proton | Version tested | Result |
 |---|---|---|

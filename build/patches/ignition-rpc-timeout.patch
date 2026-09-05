@@ -1,0 +1,106 @@
+diff --git a/projects/common/rpc_core.cpp b/projects/common/rpc_core.cpp
+index 42946b2..fcf1db9 100644
+--- a/projects/common/rpc_core.cpp
++++ b/projects/common/rpc_core.cpp
+@@ -539,7 +539,7 @@ RpcObject* RpcSystem::_FindOrCreateProxy(RpcObjectId id, RpcClassEnum classId) {
+     throw std::runtime_error("Cannot create proxy: Class ID '" + std::to_string(classId) + "' is not registered.");
+ }
+ 
+-RpcValue RpcSystem::InternalCall(RpcObjectId objId, RpcFunctionEnum funcId, const std::vector<RpcValue>& args) {
++RpcValue RpcSystem::InternalCall(RpcObjectId objId, RpcFunctionEnum funcId, const std::vector<RpcValue>& args, std::chrono::milliseconds timeout) {
+     if (!_IsConnected()) {
+         throw std::runtime_error("RPC system is not connected.");
+     }
+@@ -577,7 +577,7 @@ RpcValue RpcSystem::InternalCall(RpcObjectId objId, RpcFunctionEnum funcId, cons
+     SendRPCMessage(buffer);
+     // Wait for the return value
+     std::unique_lock<std::mutex> lock(pendingCall->mtx);
+-    if (!pendingCall->cv.wait_for(lock, std::chrono::seconds(60), [&]{ return pendingCall->completed; })) {
++    if (!pendingCall->cv.wait_for(lock, timeout, [&]{ return pendingCall->completed; })) {
+         {
+             std::lock_guard<std::mutex> pc_lock(pending_calls_mutex_);
+             pending_calls_.erase(callId);
+diff --git a/projects/common/rpc_core.h b/projects/common/rpc_core.h
+index d4ec385..9050e87 100644
+--- a/projects/common/rpc_core.h
++++ b/projects/common/rpc_core.h
+@@ -120,6 +120,12 @@ public:
+     template<typename... Args>
+     static RpcValue CallMethod(RpcObjectId objId, RpcFunctionEnum funcId, Args... args) { return GetInstance()._CallMethod(objId, funcId, args...); }
+ 
++    // Call a remote method on an object, returning early if the call doesn't
++    // complete within the given timeout. Used for calls that must not wedge
++    // SteamVR (e.g. the driver's Cleanup/RunFrame when the game DLL hangs).
++    template<typename... Args>
++    static RpcValue CallMethodTimeout(RpcObjectId objId, RpcFunctionEnum funcId, std::chrono::milliseconds timeout, Args... args) { return GetInstance()._CallMethodTimeout(objId, funcId, timeout, args...); }
++
+     static bool IsAlive() { return GetInstance()._IsAlive(); }
+ 
+     static void CreateIPC() { GetInstance()._CreateIPC(); }
+@@ -154,6 +160,7 @@ private:
+     template<typename... Args> RpcValue _Call(const std::string& funcName, Args... args);
+     template<typename... Args> RpcValue _Call(RpcFunctionEnum funcId, Args... args);
+     template<typename... Args> RpcValue _CallMethod(RpcObjectId objId, RpcFunctionEnum funcId, Args... args);
++    template<typename... Args> RpcValue _CallMethodTimeout(RpcObjectId objId, RpcFunctionEnum funcId, std::chrono::milliseconds timeout, Args... args);
+     void _CreateIPC();
+     bool _ConnectToExistingIPC();
+     void _Shutdown();
+@@ -175,7 +182,7 @@ private:
+     void SendRPCMessage(const std::vector<char>& buffer);
+     void _StartThreadPool();
+ 
+-    RpcValue InternalCall(RpcObjectId objId, RpcFunctionEnum funcId, const std::vector<RpcValue>& args);
++    RpcValue InternalCall(RpcObjectId objId, RpcFunctionEnum funcId, const std::vector<RpcValue>& args, std::chrono::milliseconds timeout);
+ 
+     std::string pipe_name_;
+     bool is_server_ = false;
+@@ -270,5 +277,10 @@ RpcValue RpcSystem::_Call(RpcFunctionEnum funcId, Args... args) {
+ 
+ template<typename... Args>
+ RpcValue RpcSystem::_CallMethod(RpcObjectId objId, RpcFunctionEnum funcId, Args... args) {
+-    return InternalCall(objId, funcId, {RpcValue(args)...});
++    return InternalCall(objId, funcId, {RpcValue(args)...}, std::chrono::seconds(60));
++}
++
++template<typename... Args>
++RpcValue RpcSystem::_CallMethodTimeout(RpcObjectId objId, RpcFunctionEnum funcId, std::chrono::milliseconds timeout, Args... args) {
++    return InternalCall(objId, funcId, {RpcValue(args)...}, timeout);
+ }
+\ No newline at end of file
+diff --git a/projects/common/rpc_server_tracked_device_provider.cpp b/projects/common/rpc_server_tracked_device_provider.cpp
+index 63ec9b6..fbf9c12 100644
+--- a/projects/common/rpc_server_tracked_device_provider.cpp
++++ b/projects/common/rpc_server_tracked_device_provider.cpp
+@@ -81,7 +81,15 @@ vr::EVRInitError RpcServerTrackedDeviceProvider::Init(vr::IVRDriverContext *pDri
+ 
+ void RpcServerTrackedDeviceProvider::Cleanup() {
+     if (IsProxy()) {
+-        RpcSystem::CallMethod(GetId(), RPCFunction_ServerTrackedDeviceProvider_Cleanup);
++        // The game DLL's Cleanup can hang when the game process isn't running
++        // (its pipe client has nothing to talk to). Don't let that wedge
++        // SteamVR's shutdown watchdog (~11s): give up after a few seconds so
++        // the driver tears down cleanly even if the server is stuck.
++        try {
++            RpcSystem::CallMethodTimeout(GetId(), RPCFunction_ServerTrackedDeviceProvider_Cleanup, std::chrono::seconds(4));
++        } catch (...) {
++            // Server unresponsive; proceed with teardown regardless.
++        }
+     }
+     else {
+         real_provider_->Cleanup();
+@@ -123,7 +131,14 @@ const char *const *RpcServerTrackedDeviceProvider::GetInterfaceVersions() {
+ 
+ void RpcServerTrackedDeviceProvider::RunFrame() {
+     if (IsProxy()) {
+-        RpcSystem::CallMethod(GetId(), RPCFunction_ServerTrackedDeviceProvider_RunFrame);
++        // Same guard as Cleanup: when the game isn't connected the server's
++        // RunFrame can stall, which would otherwise trip SteamVR's server_main
++        // watchdog (~10s). Bound the wait and move on.
++        try {
++            RpcSystem::CallMethodTimeout(GetId(), RPCFunction_ServerTrackedDeviceProvider_RunFrame, std::chrono::seconds(3));
++        } catch (...) {
++            // Server unresponsive; skip this frame.
++        }
+     }
+     else {
+         real_provider_->RunFrame();

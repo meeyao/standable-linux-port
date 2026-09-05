@@ -170,6 +170,12 @@ build_ignition() {
         && ( git checkout -f origin/HEAD 2>/dev/null \
              || git checkout -f origin/main 2>/dev/null \
              || git reset --hard origin/master ) \
+        && for p in "$REPO"/build/patches/*.patch; do
+               [ -f "$p" ] || continue
+               echo "applying $(basename "$p")"
+               git apply "$p" 2>"$LOG_FILE" \
+                   || { echo "local source change failed to apply — update $p"; exit 1; }
+           done \
         && cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
         && cmake --build build ) >>"$LOG_FILE" 2>&1 &
     local build_pid=$!
