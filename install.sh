@@ -1199,6 +1199,14 @@ if sv.get("enableSafeMode", False) is not False:
 PY
         fi
     fi
+    # The crash-timestamp file is what actually flips SteamVR into Safe Mode
+    # (and blocks standable as "blocked by a previous safe mode event" before
+    # it loads). enableSafeMode=false alone isn't enough - SteamVR re-triggers
+    # from this file. Delete it too.
+    if [ -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt" ]; then
+        run rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
+        say "Cleared SteamVR crash-timestamp (safe-mode trigger)"
+    fi
 fi
 
 if [ -n "$DRY_RUN" ]; then
