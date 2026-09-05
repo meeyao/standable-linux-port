@@ -81,6 +81,7 @@ your real paths.
 | `./standable uninstall` | Remove everything this patch added |
 | `./standable install --proton PATH` | Use a specific Proton build |
 | `./standable install --build` | Rebuild the driver bridge from source (needs dev tools; prebuilt files are used otherwise) |
+| `./standable install --no-safemode` | Persist `steamvr.enableSafeMode=false` so SteamVR stops hiding add-ons after a crash |
 
 If several Proton builds are installed, the installer asks which one to
 use. That choice is only a fallback. The driver and the game always use

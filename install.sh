@@ -42,7 +42,7 @@ run() { # run <cmd...>
         "$@"
     fi
 }
-run_env() { # run_env <env_kv...> -- <cmd...> (env prefix preserved for printing)
+run_env() { # run_env <env_kv...> -- <cmd...> (env prefix applied/printed)
     if [ -n "$DRY_RUN" ]; then
         printf '\033[1;36m # \033[0m'
         while [ "$1" != "--" ]; do printf '%s ' "$1"; shift; done
@@ -50,9 +50,10 @@ run_env() { # run_env <env_kv...> -- <cmd...> (env prefix preserved for printing
         printf '%s\n' "$*"
         return 0
     fi
-    while [ "$1" != "--" ]; do shift; done
+    local _envs=()
+    while [ "$1" != "--" ]; do _envs+=("$1"); shift; done
     shift
-    "$@"
+    env "${_envs[@]}" "$@"
 }
 
 IGNITION_URL="${IGNITION_URL:-https://github.com/BnuuySolutions/Ignition.git}"
@@ -511,6 +512,7 @@ ASSUME_YES=""
 LOG_FILE=""
 DIAGNOSE=""
 DRY_RUN=""
+NO_SAFEMODE=""
 ARGS=()
 for a in "$@"; do
     case "$a" in
@@ -521,6 +523,7 @@ for a in "$@"; do
         --log) LOG_FILE="PENDING" ;;
         --diagnose) DIAGNOSE=1 ;;
         --dry-run|-n) DRY_RUN=1 ;;
+        --no-safemode) NO_SAFEMODE=1 ;;
         --install) : ;;                 # explicit default (also run when omitted)
         --verbose|-v) set -x ;;
         *)
@@ -1157,6 +1160,30 @@ run rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/Standable GUI.desktop" "$HOM
 bak "$HOME/bin/standable_launch_hook.sh"
 gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
 run chmod +x "$HOME/bin/standable_launch_hook.sh"
+
+# --no-safemode: SteamVR drops into Safe Mode after a driver crash, which
+# hides add-ons (incl. standable). Persist enableSafeMode=false so it doesn't
+# keep re-triggering.
+if [ -n "$NO_SAFEMODE" ]; then
+    CFG="$STEAM_ROOT/config/steamvr.vrsettings"
+    if [ -f "$CFG" ]; then
+        say "Disabling SteamVR Safe Mode (--no-safemode)…"
+        if [ -n "$DRY_RUN" ]; then
+            printf '\033[1;36m # \033[0mpython3 sets steamvr.enableSafeMode=false in %s\n' "$CFG"
+        else
+            python3 - "$CFG" <<'PY'
+import json, sys
+cfg = sys.argv[1]
+d = json.load(open(cfg))
+sv = d.setdefault("steamvr", {})
+if sv.get("enableSafeMode", False) is not False:
+    sv["enableSafeMode"] = False
+    json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
+    print("  steamvr.enableSafeMode = false")
+PY
+        fi
+    fi
+fi
 
 if [ -n "$DRY_RUN" ]; then
     say "Dry run complete - nothing was changed. Copy the commands above, or run without --dry-run to apply."

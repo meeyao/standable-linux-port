@@ -30,6 +30,7 @@ Usage: ./standable <command>
                        options: --proton /path/to/proton
                        options: --build (rebuild the bridge from source)
                        options: --dry-run (print every command, change nothing)
+                       options: --no-safemode (disable SteamVR Safe Mode)
   check              Verify the installed setup (writes full diagnostics)
   uninstall          Remove everything this patch added
 
