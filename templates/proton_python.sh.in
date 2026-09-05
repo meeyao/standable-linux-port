@@ -37,7 +37,17 @@ IFS="$_OIFS"
 if [ -n "$REAL" ] && "$REAL" -c 'from typing import Self' >/dev/null 2>&1; then
     exec "$REAL" "$@"
 fi
-for _root in "@STEAM_ROOT@" "/run/host@STEAM_ROOT@"; do
+# Steam Linux Runtime 4.0 can live on any Steam library drive, not just the
+# default root. Collect all library roots from libraryfolders.vdf (same parse
+# the installer uses) so the sandbox python3.13 fallback is found on secondary
+# drives too.
+STEAM_LIBRARIES="@STEAM_ROOT@"
+if [ -f "@STEAM_ROOT@/steamapps/libraryfolders.vdf" ]; then
+    while IFS= read -r _lib; do
+        [ -n "$_lib" ] && STEAM_LIBRARIES="$STEAM_LIBRARIES $_lib"
+    done < <(awk -F'"' '/"path"/{print $4}' "@STEAM_ROOT@/steamapps/libraryfolders.vdf")
+fi
+for _root in $STEAM_LIBRARIES "/run/host"$STEAM_LIBRARIES; do
     for _plat in "$_root"/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files; do
         _py="$_plat/bin/python3.13"
         _ld="$_plat/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"

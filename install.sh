@@ -727,8 +727,17 @@ PY
         # relies on the python3 shim's fallback: Steam Linux Runtime 4.0's
         # python3.13. If that runtime is missing, Proton dies on startup and
         # SteamVR aborts after ~20 s. The host python being modern does NOT
-        # help - the sandbox doesn't see it. Check for the runtime regardless.
-        if ls "$STEAM_ROOT/steamapps/common/SteamLinuxRuntime_4"/steamrt4_platform_*/files/bin/python3.13 >/dev/null 2>&1; then
+        # help - the sandbox doesn't see it. The runtime can be on any Steam
+        # library drive, so scan them all (same parse as detect_game_dir).
+        _rt4=""
+        for _lib in "$STEAM_ROOT" $(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf" 2>/dev/null); do
+            [ -d "$_lib" ] || continue
+            for _py in "$_lib"/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files/bin/python3.13; do
+                [ -x "$_py" ] && { _rt4="$_py"; break; }
+            done
+            [ -n "$_rt4" ] && break
+        done
+        if [ -n "$_rt4" ]; then
             ok "Steam Linux Runtime 4.0 present (python3.13 fallback for Sniper sandbox)"
         else
             warn "Steam Linux Runtime 4.0 missing - modern Protons die under the Sniper sandbox (20 s Safe-Mode crash)"
