@@ -154,7 +154,11 @@ mkdir -p "$(dirname "$HOOK_LOG")"
     echo "proton: $PROTON"
     echo "game:   $GAME_DIR/Standable.exe"
 } >> "$HOOK_LOG"
-"$PROTON" run "$GAME_DIR/Standable.exe"
+# Capture the game's own output so a dead-on-arrival GUI shows its error
+# (Steam auth failure, OpenVR init, missing DLL) instead of just the exit code.
+GAME_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/game.log"
+"$PROTON" run "$GAME_DIR/Standable.exe" >> "$GAME_LOG" 2>&1
 _code=$?
 echo "exit:   $_code ($(date -Iseconds))" >> "$HOOK_LOG"
+echo "--- game output above ---" >> "$HOOK_LOG"
 exit $_code
