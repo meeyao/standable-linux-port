@@ -28,13 +28,20 @@ Usage: ./standable <command>
 
   install            Install or repair (safe to re-run)
                        options: --proton /path/to/proton
-  check              Verify the installed setup
+                       options: --build (rebuild the bridge from source)
+                       options: --dry-run (print every command, change nothing)
+  check              Verify the installed setup (writes full diagnostics)
   uninstall          Remove everything this patch added
 
 Typical flow:
   ./standable install
-  # start SteamVR, then launch Standable from Steam (plain Play works;
-  # the launch hook in ~/bin is optional, rendering-only)
+  # set the launch hook in Steam Launch Options:
+  #   bash ~/bin/standable_launch_hook.sh %command%
+  # then start SteamVR and launch Standable from Steam to get the desktop
+  # settings window. The hook is what shows the desktop GUI and keeps the
+  # game and driver on the same Proton/prefix.
+
+Logs: ~/.local/state/standable/{install,hook,serverhelper}.log
 EOF
         ;;
 esac

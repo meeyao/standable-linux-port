@@ -85,12 +85,13 @@ clear_foreign_wineservers() {
         fi
         [ -z "$pname" ] && continue
         [ "$pname" = "$home_name" ] && continue
-        if [ -r "/proc/$pid/environ" ]; then
-            # normalize /run/host prefix (Sniper sandbox form) before matching
-            tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
-                | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
-                | grep -qx "STEAM_COMPAT_DATA_PATH=${STEAM_COMPAT_DATA_PATH#/run/host}" || continue
-        fi
+        # only kill when we can confirm it's OUR prefix — fail closed. Killing
+        # a process whose environ we can't read risks nuking an unrelated Wine
+        # app (Bottles/Lutris/another game) that happens to match the pattern.
+        [ -r "/proc/$pid/environ" ] || continue
+        tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+            | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+            | grep -qx "STEAM_COMPAT_DATA_PATH=${STEAM_COMPAT_DATA_PATH#/run/host}" || continue
         kill -9 "$pid" 2>/dev/null
     done
 }
@@ -112,6 +113,11 @@ fix_vrchat() {
 reenable_driver() {
     local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
     [ -f "$cfg" ] || return 0
+    # Back up the user's original settings before our first write, so
+    # --uninstall can restore them. Only kept once.
+    if [ ! -f "$cfg.standable.bak" ]; then
+        cp -n "$cfg" "$cfg.standable.bak" 2>/dev/null
+    fi
     python3 - "$cfg" <<'PY' >/dev/null 2>&1 || return 0
 import json, sys
 cfg = sys.argv[1]

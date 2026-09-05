@@ -12,14 +12,15 @@
 
 Runs Standable Full Body Estimation on Linux using the game's own Windows
 binaries: driver, GUI window, realtime settings, T-pose calibration.
-The game's own files stay untouched. The patch only adds its own helper
-files next to them.
+The game's own files stay untouched: the patch only adds helper files next to
+them (a few in `bin/linux64/`) and places `steam_api64.dll` beside the
+Windows driver in `bin/win64/`. No game file is overwritten or removed.
 
 Based on [Ignition](https://github.com/BnuuySolutions/Ignition) by
 Bnuuy Solutions (MIT). It provides the SteamVR-Proton bridge used here;
 see `vendor/IGNITION-LICENSE`. This project is licensed under
 [MIT](LICENSE). Prefer not to use the prebuilt binaries in `vendor/`?
-[BUILDING.md](BUILDING.md) covers hash verification, substituting the
+[MANUAL.md](MANUAL.md) covers hash verification, substituting the
 official upstream release, and building from source.
 
 ## Install
@@ -29,14 +30,17 @@ Requires Linux with a native (non-Flatpak) Steam install:
 - **Steam** and **SteamVR** installed
 - Standable Full Body Estimation installed (AppId **2370570**)
 - A Proton build. `proton-cachyos-slr` and `DW-Proton` are verified end to
-  end; other builds (plain GE, RTSP) may fail to start with the host-context
-  launch hook.
+  end; Proton-GE, Experimental, and Proton 10 also work.
 
 ```sh
-git clone https://github.com/meeyao/standable-linux-port.git
+git clone -b testing/rc https://github.com/meeyao/standable-linux-port.git
 cd standable-linux-port
 ./install.sh
 ```
+
+(`testing/rc` is the actively-maintained branch. `main` is older/stable and
+won't have the recent fixes — use `testing/rc` unless you specifically want
+the older stable line.)
 
 Then launch it through Steam as you would any other title. Start **SteamVR**,
 then click **Play** on Standable.
@@ -52,6 +56,10 @@ SteamVR runs, and keeps the game and driver on the same Proton/prefix. Without
 it, Steam launches the game as a VR overlay and there's no desktop window.
 
 The game can be on any Steam library drive. The installer finds it.
+
+Don't want to run the installer? [MANUAL.md](MANUAL.md) walks through the
+same steps by hand, and `./install.sh --dry-run` prints every command with
+your real paths.
 
 ## Compatibility
 
@@ -82,8 +90,10 @@ The driver and the game must always use **the same** Proton. To switch:
 1. In **Steam**, right-click **Standable** → **Properties** →
    **Compatibility** → force a Proton.
 2. If Steam was already open, **restart Steam**.
-3. **Launch** as usual. No reinstall needed. Both pick up the new Proton
-   on their own.
+3. **Re-run `./install.sh`** — the game and driver resolve the new Proton at
+   runtime, but a leftover wineserver from the old build can hold the prefix
+   and block startup (Safe Mode ~20 s crash). The installer clears stale
+   processes automatically.
 
 ### Driver-tested Proton builds
 
@@ -93,14 +103,16 @@ Verified end to end on the dev machine:
 |---|---|---|
 | `proton-cachyos-slr` | cachyos-11.0-20260703-slr | Works |
 | `DW-Proton Latest` | dwproton-11.0-12 | Works |
-| `Proton - Experimental` | experimental-11.0-20260826 | Works (launch may be flaky) |
+| `Proton - Experimental` | experimental-11.0-20260826 | Works |
 | `Proton-CachyOS Latest` | cachyos-11.0-20260703-slr | Works |
-| `Proton-GE Latest` | GE-Proton11-6 | May not start (host-context hook) |
-| `Proton-GE RTSP Latest` | proton-rtsp-11.0-20260609-3 | May not start (host-context hook) |
+| `Proton-GE Latest` | GE-Proton11-6 | Works |
+| `Proton 10.0` | 10.0 | Works |
+| `Proton-GE RTSP Latest` | proton-rtsp-11.0-20260609-3 | Works |
 
-If a build launches and closes instantly via Steam, switch back to
-`proton-cachyos-slr` (Steam → Properties → Compatibility) and re-run
-`./install.sh`:
+If a build launches and closes instantly via Steam, switch to a different
+Proton in Steam (→ Properties → Compatibility) and re-run `./install.sh`.
+A leftover wineserver from a previous Proton is the usual cause of the
+~20 s Safe-Mode crash; `./install.sh` clears it automatically.
 
 ### Render bug: checkerboard settings background
 
@@ -113,18 +125,26 @@ does. If the pattern bothers you, switch to `proton-cachyos-slr`.
 
 ## Logging & diagnostics
 
-Every run writes a full transcript to `~/.local/state/standable/install.log`
-(`--log FILE` writes there instead). `./standable check` verifies the setup
-and appends a full system dump (OS, GPU, display server, Steam/Proton/game,
-prefix, SteamVR settings, crash signatures) to the same log:
+All logs live in `~/.local/state/standable/`:
+
+| File | What it records |
+|---|---|
+| `install.log` | Every installer run + `./standable check` full system dump |
+| `hook.log` | Each game launch through the launch hook (Proton used, exit code) |
+| `serverhelper.log` | Each driver-server launch (Proton used, wineservers before/after sweep, server exit) |
+
+`./standable check` verifies the setup and appends the full system dump (OS,
+GPU, display server, Steam/Proton/game, prefix, SteamVR settings, crash
+signatures) to `install.log`:
 
 ```sh
 ./standable check
 cat ~/.local/state/standable/install.log
 ```
 
-When filing an issue, attach the log from `./standable check` instead of
-pasting terminal output. It has everything needed.
+When filing an issue, attach the `./standable check` log. If the driver or
+game is failing to launch, also attach `hook.log` and `serverhelper.log` —
+they show the actual launch attempt where `install.log` can't.
 
 ## Important
 
@@ -140,13 +160,13 @@ pasting terminal output. It has everything needed.
 
 | Symptom | Fix |
 |---|---|
-| SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install`, then restart SteamVR |
+| SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install` (clears stale wineservers), then restart SteamVR. If it persists, attach `serverhelper.log` |
 | Game launches but no GUI | Make sure SteamVR is running; check `./standable check` |
 | "Steam authentication failed" dialog | Launch through Steam, not by starting Standable.exe directly |
 | Sliders don't apply in realtime | Re-run `./standable install`, restart SteamVR |
 | T-pose fails intermittently | Re-run `./standable install` (repairs drive links), restart SteamVR |
 | "no Proton builds found" | Pass `--proton /path/to/proton`, or install any Proton build |
-| Anything else | Open an issue with `--diagnose` output attached |
+| Anything else | Open an issue with the `./standable check` log attached |
 
 ## How it works
 

@@ -9,8 +9,8 @@
 - The driver and launch hook resolve the Proton build at runtime via a shared
   `proton_resolve.sh`. They prefer the prefix's own bookkeeping (`config_info`),
   then Steam's forced compat tool (`config.vdf`), then the install-time
-  fallback. Switching Proton in Steam's UI takes effect on the next launch for
-  both game and driver, no reinstall.
+  fallback. After switching Proton in Steam's UI, re-run `./install.sh` so
+  stale Wine processes from the old build are cleared.
 - `clear_stale_services` / `clear_foreign_wineservers` kill the previous
   build's leftover wineserver so a Proton switch doesn't leave the app
   un-launchable. Scoped to our own prefix via `/proc` environ, so unrelated
@@ -27,16 +27,16 @@
 - Proton crashed on startup under SteamVR's Sniper sandbox because its launcher
   needs Python >= 3.11 (`from typing import Self`) but Sniper only ships 3.9.
   The installer now deploys a `python3` shim that uses a capable host python or
-  the Soldier runtime's python3.13.
+  the Steam Linux Runtime 4.0 python3.13.
 - `win_vrpath.sh` (run on every driver/game boot) keeps exactly the current
   Proton's `S:\` entry in the game's Windows-side `openvrpaths.vrpath` and drops
   stale `S:\` variants and Linux paths. Does not stop the game's per-boot
   "steamVR driver path is missing" dialog — the game rewrites that file itself.
-- The recurring 21 s `load_drivers` watchdog crash (issue #1, "steamvr error
-  301") is fixed by a source patch on the Ignition build
-  (`build/patches/ignition-rpc-timeout.patch`). RPC calls that would otherwise
-  hang when the game isn't connected now time out, so the driver tears down
-  instead of tripping SteamVR's watchdog.
+- The `load_drivers` watchdog crash (issue #1, "steamvr error 301") was a
+  leftover wineserver from a previous Proton holding the prefix; the
+  install-time `clear_stale_services` sweep clears it. The Ignition source
+  patch (`build/patches/ignition-rpc-timeout.patch`) bounds RPC calls so a
+  stalled game driver can't wedge SteamVR's shutdown watchdog either.
 
 ## v3.0.2
 
@@ -51,7 +51,7 @@
   installer now vendors and deploys it.
 - `./standable check` verifies `steam_api64.dll` is deployed.
 - `vendor/steam_api64.dll` added to `SHA256SUMS`; origin documented in
-  `BUILDING.md`.
+  `MANUAL.md`.
 
 ## v3.0.0
 
@@ -61,8 +61,9 @@
   dir) and adopt it automatically.
 - Both launch scripts watch `s:` and recreate it if Proton's prefix
   maintenance deletes it (60 s after launch).
-- `./standable` CLI is the single entry point (`install`, `gui`, `check`).
+- `./standable` CLI is the single entry point (`install`, `check`,
+  `uninstall`).
 - Flatpak Steam gives a clear error instead of failing silently.
 - Install-time glibc check warns if the shipped `.so` won't load.
-- `vendor/SHA256SUMS` and `BUILDING.md` document upstream hashes and how to
+- `vendor/SHA256SUMS` and `MANUAL.md` document upstream hashes and how to
   build from source.
