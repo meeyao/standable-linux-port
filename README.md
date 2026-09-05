@@ -1,5 +1,17 @@
 # Standable FBE Linux Patch (Unofficial)
 
+> **Status: experimental.** This is the `testing/rc` branch — not the stable
+> `main` line. It carries unreleased fixes (runtime Proton switching, host
+> launch hook for a desktop GUI window, stale-process cleanup) that are still
+> being validated. Expect rough edges; report issues rather than assuming a
+> regression is intentional.
+>
+> **Development was AI-assisted.** Parts of this codebase were written and
+> debugged with AI tooling (opencode + LLM). Treat the shell scripts and
+> patches as human-reviewed but machine-assisted — review before trusting
+> behavior you care about, especially anything that kills processes or edits
+> config files.
+
 Runs Standable Full Body Estimation on Linux using the game's own Windows
 binaries: driver, GUI window, realtime settings, T-pose calibration.
 The game's own files stay untouched. The patch only adds its own helper

@@ -2,13 +2,14 @@
 # Standable launch hook — set as Steam launch options:
 #   bash ~/bin/standable_launch_hook.sh %command%
 #
-# Runs the game's own Steam command (%command%) after repairing prefix state
-# (s: link, sarek layer, VRChat link, driver re-enable, win_vrpath), so game
-# and driver share ONE prefix/wineserver (split wineservers break their IPC
-# and the game never reaches SteamVR). Chaining "$@" preserves Steam's
-# launcher (reaper, SteamLinuxRuntime container, waitforexitandrun verb) and
-# the exact Proton picked in Steam — a bare `$PROTON run` bypasses that
-# runtime and newer Proton builds die on startup.
+# Runs the game in host context (direct $PROTON run, like the retired
+# standable-gui) after repairing prefix state (s: link, sarek layer, VRChat
+# link, driver re-enable, win_vrpath), so game and driver share ONE
+# prefix/wineserver (split wineservers break their IPC and the game never
+# reaches SteamVR) AND the game renders its desktop GUI window while SteamVR
+# runs. %command% is deliberately ignored: chaining it registers the app as a
+# VR overlay (steam.overlay.<appid>) and SteamVR drops it immediately — no
+# window. SteamAppId/SteamGameId are exported below so Steam API auth works.
 #
 # NOTE: the Proton build and s: convention are resolved at runtime (see
 # below), so switching Proton in Steam's Compatibility UI takes effect on
@@ -62,8 +63,11 @@ fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 # clear_foreign_wineservers — same guard as the driver shim: a wineserver from
 # a PREVIOUS Proton holding this prefix blocks the new Proton ("version
 # mismatch ... wrong wineserver still running" → instant exit). Seen when
-# switching builds without a Steam restart. Kill only Wine processes from
-# another Proton build inside OUR prefix; ours and other prefixes untouched.
+# switching builds without a Steam restart. Also catches the orphaned
+# steam.exe/ignition_server.exe Wine tree left behind when SteamVR force-aborts
+# shutdown (its launcher dies, the Wine children reparent to systemd and linger
+# holding the prefix). Kill only Wine processes from another Proton build inside
+# OUR prefix; ours and other prefixes untouched.
 clear_foreign_wineservers() {
     local home_dir home_name pid rest pname
     home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
@@ -72,9 +76,15 @@ clear_foreign_wineservers() {
     [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && return 0
     ps -eo pid=,args= 2>/dev/null | while read -r pid rest; do
-        case "$rest" in *wine*|*proton*) : ;; *) continue ;; esac
+        case "$rest" in *wine*|*proton*|*ignition_server*) : ;; *) continue ;; esac
         pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
         [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
+        # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
+        # path; its parent is the Proton python/proton process, so fall back to
+        # matching the running wineserver's home for the same prefix.
+        if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+        fi
         [ -z "$pname" ] && continue
         [ "$pname" = "$home_name" ] && continue
         if [ -r "/proc/$pid/environ" ]; then
@@ -155,15 +165,11 @@ if ! proton_has_sarek && [ -n "${SAREK_SRC:-}" ]; then
 fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
-# Chain Steam's own launch command (%command%): it carries the
-# steam-launch-wrapper / reaper / SteamLinuxRuntime container setup plus the
-# exact Proton Steam picked (verb waitforexitandrun). Replacing it with a bare
-# `$PROTON run` bypasses that runtime — newer Proton builds (RTSP/GE-Latest)
-# then die on startup (seen: exit code 5 after ~2 s) while older builds that
-# don't need the container (cachyos-slr) happen to survive. So repairs above,
-# then hand off to Steam's command. Manual run without args falls back to the
-# old direct launch for testing.
-if [ "$#" -gt 0 ]; then
-    exec "$@"
-fi
+# Launch in host context (like the retired standable-gui): direct $PROTON run
+# of the game exe. This is what renders the desktop GUI window while SteamVR
+# runs. Steam's own %command% would register the app as a VR overlay
+# (steam.overlay.<appid>) and SteamVR drops it immediately — no window, and
+# the game exits. Direct run shares the same prefix/wineserver as the driver,
+# so their IPC still works. The Steam API still authenticates because the
+# Steam client is running and SteamAppId/SteamGameId are exported above.
 exec "$PROTON" run "$GAME_DIR/Standable.exe"

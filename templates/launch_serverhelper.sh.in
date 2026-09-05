@@ -97,9 +97,15 @@ clear_foreign_wineservers() {
     ps -eo pid=,args= 2>/dev/null | while read -r pid rest; do
         pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
         [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
+        # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
+        # path; its parent is the Proton python/proton process, so fall back to
+        # matching the running wineserver's home for the same prefix.
+        if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+        fi
         [ -z "$pname" ] && continue
         case "$rest" in
-            *wine*|*proton*) : ;;
+            *wine*|*proton*|*ignition_server*) : ;;
             *) continue ;;
         esac
         [ "$pname" = "$home_name" ] && continue
