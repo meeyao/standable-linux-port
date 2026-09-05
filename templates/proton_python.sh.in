@@ -1,5 +1,5 @@
 #!/bin/bash
-# python3 — interpreter shim so Proton's launcher runs under SteamVR.
+# python3 - interpreter shim so Proton's launcher runs under SteamVR.
 #
 # Proton's `proton` script is `#!/usr/bin/env python3`, and modern Proton
 # builds (GE/cachyos/recent Valve) do `from typing import Self`, which needs

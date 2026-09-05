@@ -1,5 +1,5 @@
 #!/bin/bash
-# launch_serverhelper.sh — spawn ignition_server.exe in shared host-context prefix.
+# launch_serverhelper.sh - spawn ignition_server.exe in shared host-context prefix.
 # FIRING ORDER MATTERS: every "$PROTON run" triggers Proton prefix maintenance
 # which DELETES custom dosdevices links (s:) mid-pass. Proton invocations go in
 # background FIRST; s: is fixed immediately and a 60s repair loop heals any
@@ -12,7 +12,7 @@ unset SteamGameId
 
 # Trace the driver-server launch: which Proton was chosen, what foreign Wine
 # processes were found/killed, and whether ignition_server.exe actually ran.
-# This is what the 21s load_drivers watchdog can't tell us — the server never
+# This is what the 21s load_drivers watchdog can't tell us - the server never
 # gets to report back, so we log our side of the handshake.
 HELPER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.log"
 mkdir -p "$(dirname "$HELPER_LOG")"
@@ -72,7 +72,7 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-# same_prefix — true when pid belongs to THIS prefix: Proton-launched processes
+# same_prefix - true when pid belongs to THIS prefix: Proton-launched processes
 # inherit STEAM_COMPAT_DATA_PATH in their environment (visible in
 # /proc/<pid>/environ). Scoping kills to our own prefix avoids disrupting
 # unrelated games that happen to use the same Proton build. When the
@@ -92,7 +92,7 @@ same_prefix() {
     [ -n "$env" ]
 }
 
-# clear_foreign_wineservers — the Ignition server must start in the prefix that
+# clear_foreign_wineservers - the Ignition server must start in the prefix that
 # THIS launch script's Proton owns. If another Proton build was ever launched in
 # the same prefix and left a wineserver (or orphaned wineboot/winedevice/xalia
 # clients) behind, the new wineserver cannot acquire the prefix lock and the
@@ -191,7 +191,7 @@ fix_vrchat() {
     ln -sfn "$src" "$dst"
 }
 
-# PSVR2 Sense controller support (Ignition) — proton run, may wipe s:
+# PSVR2 Sense controller support (Ignition) - proton run, may wipe s:
 # Free the prefix of any foreign-Proton leftover wineserver BEFORE we touch it:
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers

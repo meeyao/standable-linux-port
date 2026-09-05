@@ -1,5 +1,5 @@
 #!/bin/bash
-# Standable launch hook — set as Steam launch options:
+# Standable launch hook - set as Steam launch options:
 #   bash ~/bin/standable_launch_hook.sh %command%
 #
 # Runs the game in host context (direct $PROTON run, like the retired
@@ -8,7 +8,7 @@
 # prefix/wineserver (split wineservers break their IPC and the game never
 # reaches SteamVR) AND the game renders its desktop GUI window while SteamVR
 # runs. %command% is deliberately ignored: chaining it registers the app as a
-# VR overlay (steam.overlay.<appid>) and SteamVR drops it immediately — no
+# VR overlay (steam.overlay.<appid>) and SteamVR drops it immediately - no
 # window. SteamAppId/SteamGameId are exported below so Steam API auth works.
 #
 # NOTE: the Proton build and s: convention are resolved at runtime (see
@@ -41,7 +41,7 @@ export SteamGameId="@APP_ID@"
 
 # In-VR overlay background may show a checkerboard pattern under a Proton whose
 # D3D11 is stock DXVK; proton-cachyos-slr (the recommended build) renders it
-# correctly. We don't layer a sarek build over the prefix anymore — cross-Proton
+# correctly. We don't layer a sarek build over the prefix anymore - cross-Proton
 # DLL injection caused more trouble than the cosmetic fix was worth.
 
 PFX="$STEAM_COMPAT_DATA_PATH/pfx"
@@ -58,7 +58,7 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-# clear_foreign_wineservers — same guard as the driver shim: a wineserver from
+# clear_foreign_wineservers - same guard as the driver shim: a wineserver from
 # a PREVIOUS Proton holding this prefix blocks the new Proton ("version
 # mismatch ... wrong wineserver still running" → instant exit). Seen when
 # switching builds without a Steam restart. Also catches the orphaned
@@ -85,7 +85,7 @@ clear_foreign_wineservers() {
         fi
         [ -z "$pname" ] && continue
         [ "$pname" = "$home_name" ] && continue
-        # only kill when we can confirm it's OUR prefix — fail closed. Killing
+        # only kill when we can confirm it's OUR prefix - fail closed. Killing
         # a process whose environ we can't read risks nuking an unrelated Wine
         # app (Bottles/Lutris/another game) that happens to match the pattern.
         [ -r "/proc/$pid/environ" ] || continue
@@ -141,7 +141,7 @@ fi
 # Launch in host context (like the retired standable-gui): direct $PROTON run
 # of the game exe. This is what renders the desktop GUI window while SteamVR
 # runs. Steam's own %command% would register the app as a VR overlay
-# (steam.overlay.<appid>) and SteamVR drops it immediately — no window, and
+# (steam.overlay.<appid>) and SteamVR drops it immediately - no window, and
 # the game exits. Direct run shares the same prefix/wineserver as the driver,
 # so their IPC still works. The Steam API still authenticates because the
 # Steam client is running and SteamAppId/SteamGameId are exported above.

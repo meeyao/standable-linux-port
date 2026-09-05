@@ -1,5 +1,5 @@
 #!/bin/bash
-# proton_resolve — pick the Proton build to run right now.
+# proton_resolve - pick the Proton build to run right now.
 # Sourced (not executed) by launch_serverhelper.sh and
 # standable_launch_hook.sh. Prints a proton script path on stdout.
 #
@@ -9,7 +9,7 @@
 #  1. The prefix's own bookkeeping (<compat_dir>/config_info): Proton records
 #     the exact build dir that last maintained the prefix. Written by Proton
 #     itself before the game/driver start, so it always reflects the build
-#     Steam actually launched with — no Steam restart lag, no reinstall.
+#     Steam actually launched with - no Steam restart lag, no reinstall.
 #  2. Steam's forced compat tool (config.vdf CompatToolMapping), matched
 #     against installed builds with normalized names (handles spaces and
 #     built-in naming quirks). May lag one Steam restart (config.vdf flush).
@@ -19,7 +19,7 @@
 proton_resolve() {
     local compat="$1" root="$2" appid="$3" fallback="$4"
     local ci_dir cand norm forced d n
-    # 1. prefix bookkeeping — exact build dir, real-time
+    # 1. prefix bookkeeping - exact build dir, real-time
     if [ -f "$compat/config_info" ]; then
         ci_dir=$(sed -nE 's#^(.*)/(compatibilitytools\.d|steamapps/common)/([^/]+)/files/.*#\1/\2/\3#p' "$compat/config_info" 2>/dev/null | head -1)
         if [ -n "$ci_dir" ]; then

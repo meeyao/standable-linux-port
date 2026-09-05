@@ -13,8 +13,9 @@
   stale Wine processes from the old build are cleared.
 - `clear_stale_services` / `clear_foreign_wineservers` kill the previous
   build's leftover wineserver so a Proton switch doesn't leave the app
-  un-launchable. Scoped to our own prefix via `/proc` environ, so unrelated
-  games are left alone. Also sweeps the orphaned `steam.exe`/`ignition_server.exe`
+  un-launchable. Scoped to the game's own prefix via `/proc` environ, so
+  unrelated games are left alone. Also sweeps the orphaned
+  `steam.exe`/`ignition_server.exe`
   tree left when SteamVR force-aborts shutdown.
 - The launch hook now runs the game in host context (`$PROTON run`) instead of
   chaining Steam's `%command%`. Chaining registered the app as a
@@ -31,7 +32,7 @@
 - `win_vrpath.sh` (run on every driver/game boot) keeps exactly the current
   Proton's `S:\` entry in the game's Windows-side `openvrpaths.vrpath` and drops
   stale `S:\` variants and Linux paths. Does not stop the game's per-boot
-  "steamVR driver path is missing" dialog — the game rewrites that file itself.
+  "steamVR driver path is missing" dialog - the game rewrites that file itself.
 - The `load_drivers` watchdog crash (issue #1, "steamvr error 301") was a
   leftover wineserver from a previous Proton holding the prefix; the
   install-time `clear_stale_services` sweep clears it. The Ignition source

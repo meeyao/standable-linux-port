@@ -1,13 +1,16 @@
 # Standable FBE Linux Patch (Unofficial)
 
-> **Status: experimental.** This is the `testing/rc` branch — not the stable
-> `main` line. It carries unreleased fixes (runtime Proton switching, host
-> launch hook for a desktop GUI window, stale-process cleanup) that are still
-> being validated. Expect rough edges; report issues rather than assuming a
-> regression is intentional.
+> **You are on the `testing/rc` branch.** This is where all the new work
+> lives. `main` is older and unmaintained - don't use it.
+> [Browse `testing/rc`](https://github.com/meeyao/standable-linux-port/tree/testing/rc).
+> Recent additions here (not on `main`):
+> - [Desktop GUI window while SteamVR runs](https://github.com/meeyao/standable-linux-port/blob/testing/rc/templates/standable_launch_hook.sh.in) - launch hook runs the game in host context
+> - [Runtime Proton switching](https://github.com/meeyao/standable-linux-port/blob/testing/rc/templates/proton_resolve.sh.in) - pick whatever Proton Steam forces, no reinstall
+> - [Stale-process cleanup](https://github.com/meeyao/standable-linux-port/blob/testing/rc/install.sh) - clears leftover wineservers that caused the ~20 s Safe-Mode crash
+> - [Manual install guide](https://github.com/meeyao/standable-linux-port/blob/testing/rc/MANUAL.md) and `--dry-run` for doing it by hand
 >
 > Note: some code here was written with the help of an LLM. It's been
-> reviewed, but it's worth a skim before you rely on it — especially anything
+> reviewed, but it's worth a skim before you rely on it - especially anything
 > that kills processes or edits config files.
 
 Runs Standable Full Body Estimation on Linux using the game's own Windows
@@ -39,14 +42,14 @@ cd standable-linux-port
 ```
 
 (`testing/rc` is the actively-maintained branch. `main` is older/stable and
-won't have the recent fixes — use `testing/rc` unless you specifically want
+won't have the recent fixes - use `testing/rc` unless you specifically want
 the older stable line.)
 
 Then launch it through Steam as you would any other title. Start **SteamVR**,
 then click **Play** on Standable.
 
 To get the settings window on your desktop (instead of only in VR), set the
-launch hook as the game's Launch Options — right-click **Standable** in Steam
+launch hook as the game's Launch Options - right-click **Standable** in Steam
 → **Properties** → **Launch Options**, set:
 ```
 bash ~/bin/standable_launch_hook.sh %command%
@@ -90,7 +93,7 @@ The driver and the game must always use **the same** Proton. To switch:
 1. In **Steam**, right-click **Standable** → **Properties** →
    **Compatibility** → force a Proton.
 2. If Steam was already open, **restart Steam**.
-3. **Re-run `./install.sh`** — the game and driver resolve the new Proton at
+3. **Re-run `./install.sh`** - the game and driver resolve the new Proton at
    runtime, but a leftover wineserver from the old build can hold the prefix
    and block startup (Safe Mode ~20 s crash). The installer clears stale
    processes automatically.
@@ -143,7 +146,7 @@ cat ~/.local/state/standable/install.log
 ```
 
 When filing an issue, attach the `./standable check` log. If the driver or
-game is failing to launch, also attach `hook.log` and `serverhelper.log` —
+game is failing to launch, also attach `hook.log` and `serverhelper.log` -
 they show the actual launch attempt where `install.log` can't.
 
 ## Important
@@ -185,7 +188,7 @@ The two known failure modes are handled by the installer:
   and offers to install Steam Linux Runtime 4.0 if missing.
 - SteamVR force-aborts shutdown can leave the old Proton's Wine processes
   orphaned, holding the prefix and blocking the next launch. The launch
-  scripts sweep foreign-Proton processes in our prefix before starting.
+  scripts sweep foreign-Proton processes in the game's prefix before starting.
 
 ## Credits
 
