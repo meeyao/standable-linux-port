@@ -37,6 +37,30 @@ Hashes reference the shipped files only. The upstream release is
 - its binaries won't match `vendor/SHA256SUMS` because the shipped ones carry
 an extra patch.
 
+### The patch
+
+`build/patches/ignition-rpc-timeout.patch` adds timeouts to Ignition's RPC
+calls. Without it, a call that never gets an answer (e.g. the game isn't
+running) blocks forever, and SteamVR's watchdog aborts the driver into Safe
+Mode after ~20 s. The patch touches 3 files:
+
+- `rpc_core.cpp` / `rpc_core.h` - adds a timeout to the internal RPC call,
+  default 60 s
+- `rpc_server_tracked_device_provider.cpp` - uses short timeouts for the
+  driver's `Cleanup`/`RunFrame` so a stalled game DLL can't wedge SteamVR's
+  shutdown watchdog
+
+To reproduce it:
+
+```sh
+git clone https://github.com/BnuuySolutions/Ignition.git
+cd Ignition
+git checkout 6bb3c8a   # the commit the shipped binaries are built from
+# apply the edits by hand (see build/patches/ignition-rpc-timeout.patch),
+# then regenerate:
+git diff > /path/to/standable-linux-port/build/patches/ignition-rpc-timeout.patch
+```
+
 ### Build from source
 
 If you don't trust the vendored binaries, rebuild the three Ignition files.
