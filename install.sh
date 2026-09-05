@@ -997,7 +997,7 @@ cat <<EOF
 
   Next steps:
     Start SteamVR, then click Play on Standable.
-    Optional (fixes a checkerboard VR background):
+    To get the settings window on your desktop while SteamVR runs:
       Right-click Standable in Steam → Properties → Launch Options, set:
         bash $HOME/bin/standable_launch_hook.sh %command%
 
