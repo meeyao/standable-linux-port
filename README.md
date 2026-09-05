@@ -28,9 +28,9 @@ Requires Linux with a native (non-Flatpak) Steam install:
 
 - **Steam** and **SteamVR** installed
 - Standable Full Body Estimation installed (AppId **2370570**)
-- Any Proton build (Steam's bundled Proton works). `proton-cachyos-slr` is
-  the one verified end to end on the dev machine; others work but aren't as
-  battle-tested.
+- A Proton build. `proton-cachyos-slr` and `DW-Proton` are verified end to
+  end; other builds (plain GE, RTSP) may fail to start with the host-context
+  launch hook.
 
 ```sh
 git clone https://github.com/meeyao/standable-linux-port.git
@@ -87,20 +87,20 @@ The driver and the game must always use **the same** Proton. To switch:
 
 ### Driver-tested Proton builds
 
-`proton-cachyos-slr` is verified end to end on the dev machine. The rest
-below launched in CI/manual checks but are not guaranteed on every setup —
-if a build launches and closes instantly via Steam, switch back to
-`proton-cachyos-slr` (Steam → Properties → Compatibility) and re-run
-`./install.sh`:
+Verified end to end on the dev machine:
 
 | Proton | Version tested | Result |
 |---|---|---|
 | `proton-cachyos-slr` | cachyos-11.0-20260703-slr | Works |
-| `Proton - Experimental` | experimental-11.0-20260826 | Works |
 | `DW-Proton Latest` | dwproton-11.0-12 | Works |
+| `Proton - Experimental` | experimental-11.0-20260826 | Works (launch may be flaky) |
 | `Proton-CachyOS Latest` | cachyos-11.0-20260703-slr | Works |
-| `Proton-GE Latest` | GE-Proton11-6 | Works |
-| `Proton-GE RTSP Latest` | proton-rtsp-11.0-20260609-3 | Works |
+| `Proton-GE Latest` | GE-Proton11-6 | May not start (host-context hook) |
+| `Proton-GE RTSP Latest` | proton-rtsp-11.0-20260609-3 | May not start (host-context hook) |
+
+If a build launches and closes instantly via Steam, switch back to
+`proton-cachyos-slr` (Steam → Properties → Compatibility) and re-run
+`./install.sh`:
 
 ### Render bug: checkerboard settings background
 
