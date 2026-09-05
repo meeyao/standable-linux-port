@@ -722,15 +722,22 @@ PY
         else
             warn "Windows-side driver path not registered - repaired on next game/driver boot"
         fi
-        # Sandbox fallback: under SteamVR's Sniper sandbox only Python 3.9
-        # exists, so modern Protons rely on the python3 shim's Soldier
-        # runtime fallback. If the host python is also old AND Soldier is
-        # missing, those Protons cannot start under SteamVR at all.
-        if ! python3 -c 'from typing import Self' >/dev/null 2>&1; then
-            if ls "$STEAM_ROOT/steamapps/common/SteamLinuxRuntime_4"/steamrt4_platform_*/files/bin/python3.13 >/dev/null 2>&1; then
-                ok "Soldier runtime present (python fallback for Sniper sandbox)"
+        # SteamVR runs the driver under the Sniper sandbox, which ships only
+        # Python 3.9. Modern Protons need >= 3.11 (typing.Self), so the driver
+        # relies on the python3 shim's fallback: Steam Linux Runtime 4.0's
+        # python3.13. If that runtime is missing, Proton dies on startup and
+        # SteamVR aborts after ~20 s. The host python being modern does NOT
+        # help - the sandbox doesn't see it. Check for the runtime regardless.
+        if ls "$STEAM_ROOT/steamapps/common/SteamLinuxRuntime_4"/steamrt4_platform_*/files/bin/python3.13 >/dev/null 2>&1; then
+            ok "Steam Linux Runtime 4.0 present (python3.13 fallback for Sniper sandbox)"
+        else
+            warn "Steam Linux Runtime 4.0 missing - modern Protons die under the Sniper sandbox (20 s Safe-Mode crash)"
+            if pgrep -f 'steam\.sh' >/dev/null 2>&1; then
+                warn "triggering Steam install of Steam Linux Runtime 4.0 (appid 4183110)..."
+                ( steam steam://install/4183110 >/dev/null 2>&1 & )
+                warn "after it finishes, re-run ./standable check"
             else
-                warn "no modern python anywhere (host python3 lacks typing.Self, no Soldier runtime) - modern Protons will fail under SteamVR; install/update SteamVR to fix"
+                warn "fix: install Steam Linux Runtime 4.0, e.g. 'steam steam://install/4183110'"
             fi
         fi
         if [ -n "$PROTON" ]; then
