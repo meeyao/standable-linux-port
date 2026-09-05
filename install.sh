@@ -714,10 +714,34 @@ PY
     else
         bad "game '$GAME_SUBDIR' not found in any Steam library"
     fi
-    N=$(pgrep -xc wineserver | tail -1); N=${N:-0}
-    if [ "$N" = 0 ]; then ok "no wineservers (nothing running)"
-    elif [ "$N" = 1 ]; then ok "single wineserver (GUI+driver shared)"
-    else bad "$N wineservers running, IPC will be split!"; fi
+    # Count wineservers on OUR prefix only (a leftover foreign-Proton wineserver
+    # holding our prefix is what trips the 21s load_drivers watchdog). A
+    # system-wide count flags unrelated games as a false "IPC will be split".
+    N=$(pgrep -x wineserver 2>/dev/null | wc -l)
+    OURS=0; FOREIGN=""
+    for ws in $(pgrep -x wineserver 2>/dev/null); do
+        if [ -r "/proc/$ws/environ" ]; then
+            if tr '\0' '\n' < "/proc/$ws/environ" 2>/dev/null \
+                | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+                | grep -qx "STEAM_COMPAT_DATA_PATH=$COMPAT" >/dev/null 2>&1; then
+                OURS=$((OURS+1))
+            else
+                FOREIGN="$FOREIGN $ws"
+            fi
+        else
+            OURS=$((OURS+1))   # unreadable env — treat as ours (fail-open)
+        fi
+    done
+    if [ "$OURS" = 0 ]; then
+        ok "no wineservers on this prefix"
+    elif [ "$OURS" = 1 ] && [ -z "$FOREIGN" ]; then
+        ok "single wineserver (GUI+driver shared)"
+    elif [ "$OURS" -gt 1 ]; then
+        bad "$OURS wineservers on this prefix — IPC will be split!"
+        warn "kill the stale ones and re-run, or run ./standable install"
+    else
+        warn "1 wineserver on this prefix + foreign ones:$FOREIGN (unrelated games, fine)"
+    fi
     LOG="$STEAM_ROOT/logs/vrserver.txt"
     if [ -f "$LOG" ]; then
         F=$(tail -n 300 "$LOG" | grep -v "Failed to send message: SteamUser" | grep -v "SteamVR Shutting Down" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
