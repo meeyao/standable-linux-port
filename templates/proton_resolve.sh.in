@@ -58,18 +58,28 @@ PY
                 fi
             done
             norm=$(printf '%s' "$forced" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
-            for d in "$root"/compatibilitytools.d/*/ \
-                     /usr/share/steam/compatibilitytools.d/*/ \
-                     "$root"/steamapps/common/Proton*/; do
-                d="${d%/}"
-                [ -f "$d/proton" ] || continue
-                n=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
-                [ "$n" = "$norm" ] || continue
-                cand="$d/proton"
-                if [ -x "$cand" ] && [ -d "$d/files/lib/wine" ]; then
-                    printf '%s' "$cand"
-                    return 0
-                fi
+            # scan all Steam library drives, not just the default root - Proton
+            # builds (compat tools + built-ins) can be on any drive
+            local _libs _lib
+            _libs="$root"
+            if [ -f "$root/steamapps/libraryfolders.vdf" ]; then
+                while IFS= read -r _lib; do [ -n "$_lib" ] && _libs="$_libs $_lib"; done \
+                    < <(awk -F'"' '/"path"/{print $4}' "$root/steamapps/libraryfolders.vdf")
+            fi
+            for _root in $_libs /run/host$_libs; do
+                for d in "$_root"/compatibilitytools.d/*/ \
+                         /usr/share/steam/compatibilitytools.d/*/ \
+                         "$_root"/steamapps/common/Proton*/; do
+                    d="${d%/}"
+                    [ -f "$d/proton" ] || continue
+                    n=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+                    [ "$n" = "$norm" ] || continue
+                    cand="$d/proton"
+                    if [ -x "$cand" ] && [ -d "$d/files/lib/wine" ]; then
+                        printf '%s' "$cand"
+                        return 0
+                    fi
+                done
             done
         fi
     fi

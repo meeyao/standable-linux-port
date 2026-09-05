@@ -338,11 +338,23 @@ detect_game_dir() {
 }
 
 find_proton_builds() {
-    # prints "label|path" candidates; host-launchable proton scripts only
-    local d p
-    for d in "$HOME/.local/share/Steam/compatibilitytools.d"/* \
-             /usr/share/steam/compatibilitytools.d/* \
-             "$STEAM_ROOT/steamapps/common/Proton -"*; do
+    # prints "label|path" candidates; host-launchable proton scripts only.
+    # Protons can live on any Steam library drive (compatibilitytools.d or a
+    # built-in under steamapps/common), not just the default root - scan them
+    # all via libraryfolders.vdf, plus the system-wide /usr/share installs.
+    local d p libs
+    libs=("$STEAM_ROOT")
+    [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ] && {
+        while IFS= read -r l; do [ -n "$l" ] && libs+=("$l"); done \
+            < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
+    }
+    for lib in "${libs[@]}"; do
+        for d in "$lib/compatibilitytools.d"/* "$lib/steamapps/common/Proton -"*; do
+            p="$d/proton"
+            [ -x "$p" ] && [ -d "$d/files/lib/wine" ] && printf '%s|%s\n' "$(basename "$d")" "$p"
+        done
+    done
+    for d in /usr/share/steam/compatibilitytools.d/*; do
         p="$d/proton"
         [ -x "$p" ] && [ -d "$d/files/lib/wine" ] && printf '%s|%s\n' "$(basename "$d")" "$p"
     done
