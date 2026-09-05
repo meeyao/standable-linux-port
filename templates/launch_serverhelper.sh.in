@@ -10,9 +10,53 @@
 
 unset SteamGameId
 
+# Trace the driver-server launch: which Proton was chosen, what foreign Wine
+# processes were found/killed, and whether ignition_server.exe actually ran.
+# This is what the 21s load_drivers watchdog can't tell us — the server never
+# gets to report back, so we log our side of the handshake.
+HELPER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.log"
+mkdir -p "$(dirname "$HELPER_LOG")"
+logh() { printf '%s %s\n' "$(date -Iseconds)" "$*" >> "$HELPER_LOG"; }
+
 export STEAM_COMPAT_DATA_PATH="@COMPAT@"
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 PROTON="@PROTON@"
+logh "=== launch args: $*"
+
+# Proton's launcher is `#!/usr/bin/env python3` but modern Proton builds need
+# Python >= 3.11 (`from typing import Self`); SteamVR runs this driver under
+# the Sniper sandbox, which only ships Python 3.9, so Proton would die on
+# startup and trap SteamVR in its ~21 s watchdog. This script's directory
+# contains a `python3` shim that selects a working interpreter (host python,
+# or the Soldier runtime's python via its own loader), so prepend it for the
+# `python3` heredocs and `$PROTON run` invocations below.
+SCRIPT_DIR="$0"
+case "$SCRIPT_DIR" in
+    */*) SCRIPT_DIR="$(cd "${SCRIPT_DIR%/*}" && pwd)" ;;
+    *) SCRIPT_DIR="$PWD" ;;
+esac
+case ":$PATH:" in
+    *":$SCRIPT_DIR:"*) : ;;
+    *) PATH="$SCRIPT_DIR:$PATH"; export PATH ;;
+esac
+
+# Pick whatever Proton the game is actually running under right now, so a
+# switch in Steam's Compatibility UI takes effect on the next SteamVR boot
+# with no reinstall (and the driver can never mismatch the game and fight it
+# over the shared prefix). proton_resolve() prefers the prefix's own
+# bookkeeping (real-time), then Steam's forced tool, then the install-time
+# PROTON above. Must run before S_TARGET and any `$PROTON` use below.
+if [ -f "$SCRIPT_DIR/proton_resolve.sh" ]; then
+    . "$SCRIPT_DIR/proton_resolve.sh"
+    _R=$(proton_resolve "$STEAM_COMPAT_DATA_PATH" "@STEAM_ROOT@" "@APP_ID@" "$PROTON" 2>/dev/null)
+    if [ -n "$_R" ] && [ "$_R" != "$PROTON" ]; then
+        echo "launch_serverhelper: using Proton $(basename "$(dirname "$_R")") (deployed: $(basename "$(dirname "$PROTON")"))" >&2
+        PROTON="$_R"
+    fi
+    unset _R
+fi
+logh "proton: $PROTON"
+logh "wineservers before sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
 S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # Drive convention differs by Proton build: newer Valve Protons manage the
 # s: drive themselves (gamedrive -> Steam PARENT dir, paths like
@@ -28,9 +72,78 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
+# same_prefix — true when pid belongs to THIS prefix: Proton-launched processes
+# inherit STEAM_COMPAT_DATA_PATH in their environment (visible in
+# /proc/<pid>/environ). Scoping kills to our own prefix avoids disrupting
+# unrelated games that happen to use the same Proton build. When the
+# environment can't be read, return true (fail-open: a foreign wineserver
+# holding our prefix would otherwise wedge the driver past the watchdog).
+# The path is normalized (strip a leading /run/host) because SteamVR's Sniper
+# sandbox can present host paths as /run/host/home/... while we were baked
+# with the plain /home/... form.
+same_prefix() {
+    local env want
+    [ -n "$1" ] || return 0
+    [ -r "/proc/$1/environ" ] || return 0
+    want="${STEAM_COMPAT_DATA_PATH#/run/host}"
+    env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null \
+        | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+        | grep -x "STEAM_COMPAT_DATA_PATH=$want")
+    [ -n "$env" ]
+}
+
+# clear_foreign_wineservers — the Ignition server must start in the prefix that
+# THIS launch script's Proton owns. If another Proton build was ever launched in
+# the same prefix and left a wineserver (or orphaned wineboot/winedevice/xalia
+# clients) behind, the new wineserver cannot acquire the prefix lock and the
+# driver's handshake stalls past SteamVR's ~21 s watchdog, hard-crashing it into
+# safe mode. Kill any Wine process whose Proton differs from the one we run, so
+# the driver launch is never blocked by cross-Proton prefix contention. Processes
+# from OUR OWN Proton are left untouched (a running game/driver in the same
+# prefix must not be disrupted), as are processes from other prefixes (an
+# unrelated game using the same Proton build must not be disrupted either).
+clear_foreign_wineservers() {
+    local home_dir home_name pid args pname
+    home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
+    home_name=""
+    # home proton dir is either .../compatibilitytools.d/<name> or .../steamapps/common/<name>
+    home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
+    [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
+    [ -z "$home_name" ] && return 0
+    # also accept the Steam-VR-prefixed built-ins like "Proton - Experimental"
+    ps -eo pid=,args= 2>/dev/null | while read -r pid rest; do
+        pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
+        [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
+        # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
+        # path; its parent is the Proton python/proton process, so fall back to
+        # matching the running wineserver's home for the same prefix.
+        if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+        fi
+        [ -z "$pname" ] && continue
+        case "$rest" in
+            *wine*|*proton*|*ignition_server*) : ;;
+            *) continue ;;
+        esac
+        [ "$pname" = "$home_name" ] && continue
+        # only our own prefix: a foreign-proton wineserver elsewhere is harmless
+        same_prefix "$pid" || continue
+        # per-pid kill (not pkill by build name): each foreign process in our
+        # prefix is visited by this loop, so no broad pattern is needed and
+        # other prefixes are never touched
+        kill -9 "$pid" 2>/dev/null
+    done
+}
+
 # Fix SteamVR state: a transient handshake timeout can leave the driver
-# disabled or SteamVR in safe mode. Clear both before driver load so
-# standable gets a fresh chance each session.
+# disabled or SteamVR in safe mode. Clear every blocker before driver load so
+# standable gets a fresh chance each session. SteamVR records the driver as
+# "blocked by a previous safe mode event" in two places:
+#   * config/steamvr.vrsettings  -> driver_standable.blocked_by_safe_mode = true
+#   * config/vrserver_crash_timestamp.txt  (the safe-mode trigger file)
+# Clearing only `enable`/`enableSafeMode` is NOT enough: those two markers are
+# what actually suppress standable on the next boot. Removing them here lets
+# the driver re-attempt cleanly even after a prior watchdog abort.
 fix_steamvr_state() {
     local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
     [ -f "$cfg" ] || return 0
@@ -39,8 +152,11 @@ import json, sys
 cfg = sys.argv[1]
 d = json.load(open(cfg))
 changed = False
-if d.get("driver_standable", {}).get("enable", True) is False:
-    d["driver_standable"]["enable"] = True
+ds = d.setdefault("driver_standable", {})
+if ds.pop("blocked_by_safe_mode", None) is not None:
+    changed = True
+if ds.get("enable", True) is False:
+    ds["enable"] = True
     changed = True
 if d.get("steamvr", {}).get("enableSafeMode", False) is True:
     d["steamvr"]["enableSafeMode"] = False
@@ -48,7 +164,13 @@ if d.get("steamvr", {}).get("enableSafeMode", False) is True:
 if changed:
     json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
 PY
+    # The crash-timestamp file is SteamVR's safe-mode trigger; drop it so a
+    # fresh session isn't treated as a repeat of the previous abort.
+    rm -f "@STEAM_ROOT@/config/vrserver_crash_timestamp.txt"
 }
+
+# (SCRIPT_DIR PATH prepend + Proton resolution already ran near the top,
+# before S_TARGET and any $PROTON use.)
 
 # Auto-calibration: driver reads VRChat's IK log from
 # %UserProfile%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt in its own
@@ -65,11 +187,23 @@ fix_vrchat() {
 }
 
 # PSVR2 Sense controller support (Ignition) — proton run, may wipe s:
+# Free the prefix of any foreign-Proton leftover wineserver BEFORE we touch it:
+# a stale one would block our server launch and trip SteamVR's watchdog.
+clear_foreign_wineservers
+logh "wineservers after sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
 "$PROTON" run reg import ./wine_psvr2_hidraw.reg >/dev/null 2>&1 &
 
 fix_s
 fix_vrchat
 fix_steamvr_state
+# Repair the game's Windows-side driver registration: drop Linux paths and
+# stale-convention S:\ variants so the registration stays clean.
+if [ -x "$SCRIPT_DIR/win_vrpath.sh" ]; then
+    "$SCRIPT_DIR/win_vrpath.sh" "$STEAM_COMPAT_DATA_PATH/pfx" "$(cd "$SCRIPT_DIR/../.." && pwd)" "$S_TARGET"
+fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
-exec "$PROTON" run "$@"
+"$PROTON" run "$@"
+_code=$?
+logh "server exit: $_code"
+exit $_code

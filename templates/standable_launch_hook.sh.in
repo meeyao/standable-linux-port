@@ -2,20 +2,35 @@
 # Standable launch hook — set as Steam launch options:
 #   bash ~/bin/standable_launch_hook.sh %command%
 #
-# Runs the game through the SAME $PROTON run the driver shim uses, so game and
-# driver share ONE prefix/wineserver (split wineservers break their IPC and the
-# game never reaches SteamVR). %command% is ignored: we always launch
-# $GAME_DIR/Standable.exe ourselves.
+# Runs the game in host context (direct $PROTON run, like the retired
+# standable-gui) after repairing prefix state (s: link, VRChat
+# link, driver re-enable, win_vrpath), so game and driver share ONE
+# prefix/wineserver (split wineservers break their IPC and the game never
+# reaches SteamVR) AND the game renders its desktop GUI window while SteamVR
+# runs. %command% is deliberately ignored: chaining it registers the app as a
+# VR overlay (steam.overlay.<appid>) and SteamVR drops it immediately — no
+# window. SteamAppId/SteamGameId are exported below so Steam API auth works.
 #
-# NOTE: s: convention is baked at install time from the Proton the installer
-# picked. The game exe path and Proton are baked too, so nothing is re-detected
-# at runtime.
+# NOTE: the Proton build and s: convention are resolved at runtime (see
+# below), so switching Proton in Steam's Compatibility UI takes effect on
+# the next launch with no reinstall. Only the game exe path is baked.
 
 STEAM_COMPAT_DATA_PATH="@COMPAT@"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 export STEAM_COMPAT_DATA_PATH STEAM_COMPAT_CLIENT_INSTALL_PATH
 PROTON="@PROTON@"
 GAME_DIR="@GAME_DIR@"
+
+# Run under whatever Proton the game is actually using right now (same
+# shared resolver as the driver shim): the prefix's own bookkeeping first
+# (the outer Steam proton run just updated it), then Steam's forced tool,
+# then the install-time PROTON above.
+if [ -f "$GAME_DIR/bin/linux64/proton_resolve.sh" ]; then
+    . "$GAME_DIR/bin/linux64/proton_resolve.sh"
+    _R=$(proton_resolve "$STEAM_COMPAT_DATA_PATH" "@STEAM_ROOT@" "@APP_ID@" "$PROTON" 2>/dev/null)
+    [ -n "$_R" ] && PROTON="$_R"
+    unset _R
+fi
 
 # We launch via bare $PROTON run (sharing the driver's wineserver), which
 # bypasses Steam's launcher that normally exports these. The game's Steamworks
@@ -24,48 +39,62 @@ GAME_DIR="@GAME_DIR@"
 export SteamAppId="@APP_ID@"
 export SteamGameId="@APP_ID@"
 
-# In-VR overlay background renders as a checker/test pattern under stock DXVK.
-# When the Proton that launched us ships dxvk-sarek (VR-tuned DXVK), opt in via
-# PROTON_DXVK_SAREK. When it doesn't (plain GE, Valve stock), we layer sarek's
-# DLLs over the prefix ourselves; Proton re-deploys its own DXVK on each run, so
-# a background loop re-applies the layer just like the s:/VRChat repair loops.
-export PROTON_DXVK_SAREK=1
+# In-VR overlay background may show a checkerboard pattern under a Proton whose
+# D3D11 is stock DXVK; proton-cachyos-slr (the recommended build) renders it
+# correctly. We don't layer a sarek build over the prefix anymore — cross-Proton
+# DLL injection caused more trouble than the cosmetic fix was worth.
 
 PFX="$STEAM_COMPAT_DATA_PATH/pfx"
 S_LINK="$PFX/dosdevices/s:"
-S_TARGET="@S_TARGET@"
+# s: convention follows the RUNNING Proton (recomputed: newer Valve Protons
+# manage s: themselves via get_validated_steamapps_parent, older forks map it
+# to steamapps). S_ROOT is the game library root (grandparent of GAME_DIR).
+S_ROOT="$(cd "$GAME_DIR/../.." 2>/dev/null && pwd)"
+[ -n "$S_ROOT" ] || S_ROOT="@STEAM_ROOT@"
+if grep -q 'get_validated_steamapps_parent' "${PROTON%/proton}/proton" 2>/dev/null; then
+    S_TARGET="$S_ROOT"
+else
+    S_TARGET="$S_ROOT/steamapps"
+fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-proton_has_sarek() { [ -d "${PROTON%/proton}/files/lib/wine/dxvk-sarek" ]; }
-find_sarek_src() {
-    local preferred p pot s
-    for preferred in proton-cachyos-slr dwproton dwproton-signed; do
-        p="/usr/share/steam/compatibilitytools.d/$preferred/files/lib/wine/dxvk-sarek"
-        [ -d "$p" ] && { echo "$p"; return 0; }
-        p="@STEAM_ROOT@/compatibilitytools.d/$preferred/files/lib/wine/dxvk-sarek"
-        [ -d "$p" ] && { echo "$p"; return 0; }
+# clear_foreign_wineservers — same guard as the driver shim: a wineserver from
+# a PREVIOUS Proton holding this prefix blocks the new Proton ("version
+# mismatch ... wrong wineserver still running" → instant exit). Seen when
+# switching builds without a Steam restart. Also catches the orphaned
+# steam.exe/ignition_server.exe Wine tree left behind when SteamVR force-aborts
+# shutdown (its launcher dies, the Wine children reparent to systemd and linger
+# holding the prefix). Kill only Wine processes from another Proton build inside
+# OUR prefix; ours and other prefixes untouched.
+clear_foreign_wineservers() {
+    local home_dir home_name pid rest pname
+    home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
+    [ -n "$home_dir" ] || return 0
+    home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
+    [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
+    [ -z "$home_name" ] && return 0
+    ps -eo pid=,args= 2>/dev/null | while read -r pid rest; do
+        case "$rest" in *wine*|*proton*|*ignition_server*) : ;; *) continue ;; esac
+        pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
+        [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
+        # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
+        # path; its parent is the Proton python/proton process, so fall back to
+        # matching the running wineserver's home for the same prefix.
+        if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+        fi
+        [ -z "$pname" ] && continue
+        [ "$pname" = "$home_name" ] && continue
+        if [ -r "/proc/$pid/environ" ]; then
+            # normalize /run/host prefix (Sniper sandbox form) before matching
+            tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+                | grep -qx "STEAM_COMPAT_DATA_PATH=${STEAM_COMPAT_DATA_PATH#/run/host}" || continue
+        fi
+        kill -9 "$pid" 2>/dev/null
     done
-    for pot in /usr/share/steam/compatibilitytools.d/*/ \
-               "@STEAM_ROOT@/compatibilitytools.d/"*/; do
-        [ -d "$pot" ] || continue
-        s="${pot}files/lib/wine/dxvk-sarek"
-        [ -d "$s" ] && { echo "$s"; return 0; }
-    done
-    return 1
 }
-deploy_sarek() {
-    local src="$1"
-    [ -d "$src" ] || return 0
-    mkdir -p "$PFX/drive_c/windows/system32" "$PFX/drive_c/windows/syswow64"
-    for f in d3d11 d3d10core d3d9 d3d8 dxgi ddraw; do
-        [ -f "$src/x86_64-windows/$f.dll" ] && cp -f "$src/x86_64-windows/$f.dll" "$PFX/drive_c/windows/system32/$f.dll" 2>/dev/null
-        [ -f "$src/i386-windows/$f.dll"    ] && cp -f "$src/i386-windows/$f.dll"    "$PFX/drive_c/windows/syswow64/$f.dll"   2>/dev/null
-    done
-}
-if ! proton_has_sarek; then
-    SAREK_SRC="$(find_sarek_src || true)"
-    [ -n "$SAREK_SRC" ] && deploy_sarek "$SAREK_SRC"
-fi
+clear_foreign_wineservers
 
 fix_vrchat() {
     local src="@VRCHAT_VRC_DIR@"
@@ -96,9 +125,30 @@ PY
 fix_s
 fix_vrchat
 reenable_driver
-if ! proton_has_sarek && [ -n "${SAREK_SRC:-}" ]; then
-    ( for i in $(seq 20); do sleep 3; deploy_sarek "$SAREK_SRC"; done ) &
+# Keep the Windows-side driver registration clean (drops Linux paths and
+# stale-convention S:\ variants the game otherwise accumulates).
+if [ -x "$GAME_DIR/bin/linux64/win_vrpath.sh" ]; then
+    "$GAME_DIR/bin/linux64/win_vrpath.sh" "$PFX" "$GAME_DIR" "$S_TARGET"
 fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
-exec "$PROTON" run "$GAME_DIR/Standable.exe"
+# Launch in host context (like the retired standable-gui): direct $PROTON run
+# of the game exe. This is what renders the desktop GUI window while SteamVR
+# runs. Steam's own %command% would register the app as a VR overlay
+# (steam.overlay.<appid>) and SteamVR drops it immediately — no window, and
+# the game exits. Direct run shares the same prefix/wineserver as the driver,
+# so their IPC still works. The Steam API still authenticates because the
+# Steam client is running and SteamAppId/SteamGameId are exported above.
+# Log the launch (proton chosen + exit) so a dead-on-arrival GUI is traceable
+# without another debug round-trip.
+HOOK_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/hook.log"
+mkdir -p "$(dirname "$HOOK_LOG")"
+{
+    echo "=== $(date -Iseconds) launch ==="
+    echo "proton: $PROTON"
+    echo "game:   $GAME_DIR/Standable.exe"
+} >> "$HOOK_LOG"
+"$PROTON" run "$GAME_DIR/Standable.exe"
+_code=$?
+echo "exit:   $_code ($(date -Iseconds))" >> "$HOOK_LOG"
+exit $_code
