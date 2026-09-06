@@ -1203,6 +1203,9 @@ if [ -f "$HOME/bin/standable_launch_hook.sh" ]; then
     bak "$HOME/bin/standable_launch_hook.sh"
     gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
     run chmod +x "$HOME/bin/standable_launch_hook.sh"
+    say "Note: launch hook moved to ~/.local/bin - update Steam Launch Options to:"
+    say "  bash \$HOME/.local/bin/standable_launch_hook.sh %command%"
+    say "(old ~/bin copy kept working until you switch; uninstall removes both)"
 fi
 
 # --no-safemode: SteamVR drops into Safe Mode after a driver crash, which
