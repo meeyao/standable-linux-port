@@ -79,9 +79,15 @@ clear_foreign_wineservers() {
         [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
         # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
         # path; its parent is the Proton python/proton process, so fall back to
-        # matching the running wineserver's home for the same prefix.
+        # matching the running wine tree's Proton home. Match ONLY the proton
+        # build dir - the broad `steamapps/common/<dir>` pattern also matches
+        # the game dir (STEAM_COMPAT_INSTALL_PATH=.../Standable Full Body
+        # Estimation), which made the driver's own server look "foreign" and
+        # got it killed at every game launch.
         if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
-            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
+                | head -1 | sed -E 's#.*/##')
         fi
         [ -z "$pname" ] && continue
         [ "$pname" = "$home_name" ] && continue
@@ -140,11 +146,12 @@ fi
 
 # Launch in host context (like the retired standable-gui): direct $PROTON run
 # of the game exe. This is what renders the desktop GUI window while SteamVR
-# runs. Steam's own %command% would register the app as a VR overlay
-# (steam.overlay.<appid>) and SteamVR drops it immediately - no window, and
-# the game exits. Direct run shares the same prefix/wineserver as the driver,
-# so their IPC still works. The Steam API still authenticates because the
-# Steam client is running and SteamAppId/SteamGameId are exported above.
+# runs. Steam's own %command% is deliberately ignored: chaining it registers
+# the app as a VR overlay (steam.overlay.<appid>) and SteamVR drops it
+# immediately - no window, and the game exits. Direct run shares the same
+# prefix/wineserver as the driver, so their IPC still works. The Steam API
+# still authenticates because the Steam client is running and
+# SteamAppId/SteamGameId are exported above.
 # Log the launch (proton chosen + exit) so a dead-on-arrival GUI is traceable
 # without another debug round-trip.
 HOOK_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/hook.log"

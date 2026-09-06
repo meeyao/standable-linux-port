@@ -116,9 +116,15 @@ clear_foreign_wineservers() {
         [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
         # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
         # path; its parent is the Proton python/proton process, so fall back to
-        # matching the running wineserver's home for the same prefix.
+        # matching the running wine tree's Proton home. Match ONLY the proton
+        # build dir - the broad `steamapps/common/<dir>` pattern also matches
+        # the game dir (STEAM_COMPAT_INSTALL_PATH=.../Standable Full Body
+        # Estimation), which made the driver's own server look "foreign" and
+        # got it killed at every game launch.
         if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
-            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
+                | head -1 | sed -E 's#.*/##')
         fi
         [ -z "$pname" ] && continue
         case "$rest" in
