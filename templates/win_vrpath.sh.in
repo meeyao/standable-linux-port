@@ -1,12 +1,12 @@
 #!/bin/bash
-# win_vrpath.sh — repair the game's Windows-side openvrpaths.vrpath.
+# win_vrpath.sh - repair the game's Windows-side openvrpaths.vrpath.
 # Usage: win_vrpath.sh <prefix_dir> <game_dir> <s_target>
 #
 # The game runs under Wine and reads its driver registration from
-# <prefix>/drive_c/users/*/AppData/Local/openvr/openvrpaths.vrpath — NOT the
+# <prefix>/drive_c/users/*/AppData/Local/openvr/openvrpaths.vrpath - NOT the
 # Linux ~/.config copy. Two things rot its external_drivers list:
 #   * Linux absolute paths (e.g. /home/.../Standable Full Body Estimation),
-#     seeded by older installs — meaningless under Wine, and the game pops a
+#     seeded by older installs - meaningless under Wine, and the game pops a
 #     "steamvr driver path not found" dialog on every boot because of them.
 #   * stale S:\ variants from a previous Proton's s: convention
 #     (S:\common\... vs S:\steamapps\common\...); only the current Proton's

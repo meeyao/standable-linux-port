@@ -1,5 +1,5 @@
 #!/bin/bash
-# launch_serverhelper.sh — spawn ignition_server.exe in shared host-context prefix.
+# launch_serverhelper.sh - spawn ignition_server.exe in shared host-context prefix.
 # FIRING ORDER MATTERS: every "$PROTON run" triggers Proton prefix maintenance
 # which DELETES custom dosdevices links (s:) mid-pass. Proton invocations go in
 # background FIRST; s: is fixed immediately and a 60s repair loop heals any
@@ -12,7 +12,7 @@ unset SteamGameId
 
 # Trace the driver-server launch: which Proton was chosen, what foreign Wine
 # processes were found/killed, and whether ignition_server.exe actually ran.
-# This is what the 21s load_drivers watchdog can't tell us — the server never
+# This is what the 21s load_drivers watchdog can't tell us - the server never
 # gets to report back, so we log our side of the handshake.
 HELPER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.log"
 mkdir -p "$(dirname "$HELPER_LOG")"
@@ -72,7 +72,7 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-# same_prefix — true when pid belongs to THIS prefix: Proton-launched processes
+# same_prefix - true when pid belongs to THIS prefix: Proton-launched processes
 # inherit STEAM_COMPAT_DATA_PATH in their environment (visible in
 # /proc/<pid>/environ). Scoping kills to our own prefix avoids disrupting
 # unrelated games that happen to use the same Proton build. When the
@@ -83,8 +83,8 @@ fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 # with the plain /home/... form.
 same_prefix() {
     local env want
-    [ -n "$1" ] || return 0
-    [ -r "/proc/$1/environ" ] || return 0
+    [ -n "$1" ] || return 1
+    [ -r "/proc/$1/environ" ] || return 1
     want="${STEAM_COMPAT_DATA_PATH#/run/host}"
     env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null \
         | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
@@ -92,7 +92,7 @@ same_prefix() {
     [ -n "$env" ]
 }
 
-# clear_foreign_wineservers — the Ignition server must start in the prefix that
+# clear_foreign_wineservers - the Ignition server must start in the prefix that
 # THIS launch script's Proton owns. If another Proton build was ever launched in
 # the same prefix and left a wineserver (or orphaned wineboot/winedevice/xalia
 # clients) behind, the new wineserver cannot acquire the prefix lock and the
@@ -116,9 +116,15 @@ clear_foreign_wineservers() {
         [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
         # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
         # path; its parent is the Proton python/proton process, so fall back to
-        # matching the running wineserver's home for the same prefix.
+        # matching the running wine tree's Proton home. Match ONLY the proton
+        # build dir - the broad `steamapps/common/<dir>` pattern also matches
+        # the game dir (STEAM_COMPAT_INSTALL_PATH=.../Standable Full Body
+        # Estimation), which made the driver's own server look "foreign" and
+        # got it killed at every game launch.
         if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
-            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Eo '(compatibilitytools\.d|steamapps/common)/[^/]+' | head -1 | sed -E 's#.*/##')
+            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
+                | head -1 | sed -E 's#.*/##')
         fi
         [ -z "$pname" ] && continue
         case "$rest" in
@@ -147,6 +153,11 @@ clear_foreign_wineservers() {
 fix_steamvr_state() {
     local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
     [ -f "$cfg" ] || return 0
+    # Back up the user's original settings before our first write, so
+    # --uninstall can restore them. Only kept once.
+    if [ ! -f "$cfg.standable.bak" ]; then
+        cp -n "$cfg" "$cfg.standable.bak" 2>/dev/null
+    fi
     python3 - "$cfg" <<'PY' >/dev/null 2>&1 || return 0
 import json, sys
 cfg = sys.argv[1]
@@ -186,7 +197,7 @@ fix_vrchat() {
     ln -sfn "$src" "$dst"
 }
 
-# PSVR2 Sense controller support (Ignition) — proton run, may wipe s:
+# PSVR2 Sense controller support (Ignition) - proton run, may wipe s:
 # Free the prefix of any foreign-Proton leftover wineserver BEFORE we touch it:
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers
@@ -203,6 +214,13 @@ if [ -x "$SCRIPT_DIR/win_vrpath.sh" ]; then
 fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
 
+# Proton dies with exit 1 and no output we can see, so capture its own log
+# (PROTON_LOG) into the standable state dir. That's the file that tells us
+# WHY the server launch fails when it exits before starting a wineserver.
+PROTON_LOG=1
+PROTON_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/standable/proton-server.log"
+export PROTON_LOG PROTON_LOG_FILE
+logh "launching: $PROTON run $*"
 "$PROTON" run "$@"
 _code=$?
 logh "server exit: $_code"
