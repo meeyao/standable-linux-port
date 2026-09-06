@@ -3,8 +3,8 @@
 > `testing/rc` is the maintained branch. `main` is stale.
 >
 > Note: some code here was written with the help of an LLM. It's been
-> reviewed, but it's worth a skim before you rely on it - especially anything
-> that kills processes or edits config files.
+> reviewed and tested, but it's worth a skim before you rely on it -
+> especially anything that kills processes or edits config files.
 
 Runs Standable Full Body Estimation on Linux using the game's own Windows
 binaries: driver, GUI window, realtime settings, T-pose calibration.
