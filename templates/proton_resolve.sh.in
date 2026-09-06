@@ -81,6 +81,35 @@ PY
                     fi
                 done
             done
+            # Valve built-ins use a short internal name without the minor
+            # version: config.vdf says "proton_10" but the dir is
+            # "Proton 10.0" (norms "proton10" vs "proton100"). Same for
+            # "proton_9" vs "Proton 9.0", etc. Fall back to a
+            # version-prefix match where the only extra chars are zeros
+            # (so proton10 matches proton100, but proton41 never matches
+            # proton411).
+            for _root in $_libs /run/host$_libs; do
+                for d in "$_root"/compatibilitytools.d/*/ \
+                         /usr/share/steam/compatibilitytools.d/*/ \
+                         "$_root"/steamapps/common/Proton*/; do
+                    d="${d%/}"
+                    [ -f "$d/proton" ] || continue
+                    n=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')
+                    case "$n" in
+                        "$norm"0*|"$norm")
+                            rest="${n#$norm}"
+                            case "$rest" in ""|0*) : ;; *) continue ;; esac
+                            case "$rest" in *[!0]*) continue ;; esac
+                            ;;
+                        *) continue ;;
+                    esac
+                    cand="$d/proton"
+                    if [ -x "$cand" ] && [ -d "$d/files/lib/wine" ]; then
+                        printf '%s' "$cand"
+                        return 0
+                    fi
+                done
+            done
         fi
     fi
     # 3. install-time fallback

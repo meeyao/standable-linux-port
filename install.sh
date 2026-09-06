@@ -349,7 +349,9 @@ find_proton_builds() {
             < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
     }
     for lib in "${libs[@]}"; do
-        for d in "$lib/compatibilitytools.d"/* "$lib/steamapps/common/Proton -"*; do
+        # NOTE: built-ins are "Proton 10.0" (no dash) as well as
+        # "Proton - Experimental" - "Proton -*" alone misses versioned builds.
+        for d in "$lib/compatibilitytools.d"/* "$lib"/steamapps/common/Proton*; do
             p="$d/proton"
             [ -x "$p" ] && [ -d "$d/files/lib/wine" ] && printf '%s|%s\n' "$(basename "$d")" "$p"
         done
