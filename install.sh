@@ -656,13 +656,19 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
-    if [ -x "$HOME/bin/standable_launch_hook.sh" ]; then
-        ok "~/bin/standable_launch_hook.sh installed"
+    # Launch hook lives in ~/.local/bin (XDG, hidden); older installs used
+    # ~/bin - accept either so existing Steam launch options keep working.
+    _hook=""
+    for _h in "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/bin/standable_launch_hook.sh"; do
+        [ -x "$_h" ] && { _hook="$_h"; break; }
+    done
+    if [ -n "$_hook" ]; then
+        ok "standable_launch_hook.sh installed ($_hook)"
         # A stale hook (pre-host-context) still exists+is executable, but chains
         # %command% or runs the old direct path wrong - desktop GUI never shows.
         # Verify it's the current host-context launcher.
-        if grep -q 'exec "\$PROTON" run "\$GAME_DIR/Standable.exe"' "$HOME/bin/standable_launch_hook.sh" \
-           || grep -q '"$PROTON" run "$GAME_DIR/Standable.exe"' "$HOME/bin/standable_launch_hook.sh"; then
+        if grep -q 'exec "\$PROTON" run "\$GAME_DIR/Standable.exe"' "$_hook" \
+           || grep -q '"$PROTON" run "$GAME_DIR/Standable.exe"' "$_hook"; then
             ok "launch hook is the host-context (desktop GUI) version"
         else
             bad "launch hook is stale (not host-context) - re-run ./standable install, desktop GUI won't show"
@@ -951,7 +957,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     detect_game_dir || die "game not found"
     pick_prefix
     say "Removing port artifacts…"
-    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
     rm -fv "$HOME/.local/share/icons/standable.png"
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
@@ -1168,7 +1174,7 @@ gen() { # gen <template> <dest> - substitute placeholders, write dest
         -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
         "$REPO/templates/$1" > "$2"
 }
-run mkdir -p "$HOME/bin"
+run mkdir -p "$HOME/.local/bin"
 bak "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 run chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
@@ -1187,9 +1193,17 @@ run chmod +x "$GAME_DIR/bin/linux64/python3"
 gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
 # retire legacy GUI launcher from older installs
 run rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/Standable GUI.desktop" "$HOME/Desktop/standable-gui.desktop"
-bak "$HOME/bin/standable_launch_hook.sh"
-gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
-run chmod +x "$HOME/bin/standable_launch_hook.sh"
+# Launch hook goes in ~/.local/bin (XDG, hidden - no ~/ clutter). Older
+# installs used ~/bin; keep that copy in sync too so existing Steam launch
+# options pointing there keep working.
+bak "$HOME/.local/bin/standable_launch_hook.sh"
+gen standable_launch_hook.sh.in "$HOME/.local/bin/standable_launch_hook.sh"
+run chmod +x "$HOME/.local/bin/standable_launch_hook.sh"
+if [ -f "$HOME/bin/standable_launch_hook.sh" ]; then
+    bak "$HOME/bin/standable_launch_hook.sh"
+    gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
+    run chmod +x "$HOME/bin/standable_launch_hook.sh"
+fi
 
 # --no-safemode: SteamVR drops into Safe Mode after a driver crash, which
 # hides add-ons (incl. standable). Persist enableSafeMode=false so it doesn't
@@ -1233,7 +1247,7 @@ else
     Start SteamVR, then click Play on Standable.
     To get the settings window on your desktop while SteamVR runs:
       Right-click Standable in Steam → Properties → Launch Options, set:
-        bash $HOME/bin/standable_launch_hook.sh %command%
+        bash $HOME/.local/bin/standable_launch_hook.sh %command%
 
   Verify anytime with:  $REPO/install.sh --check
   Log for this run:     $LOG_FILE

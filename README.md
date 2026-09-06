@@ -52,7 +52,7 @@ To get the settings window on your desktop (instead of only in VR), set the
 launch hook as the game's Launch Options - right-click **Standable** in Steam
 → **Properties** → **Launch Options**, set:
 ```
-bash ~/bin/standable_launch_hook.sh %command%
+bash ~/.local/bin/standable_launch_hook.sh %command%
 ```
 The hook runs the game in host context so the desktop window renders while
 SteamVR runs, and keeps the game and driver on the same Proton/prefix. Without

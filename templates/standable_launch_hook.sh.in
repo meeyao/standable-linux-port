@@ -1,6 +1,6 @@
 #!/bin/bash
 # Standable launch hook - set as Steam launch options:
-#   bash ~/bin/standable_launch_hook.sh %command%
+#   bash ~/.local/bin/standable_launch_hook.sh %command%
 #
 # Runs the game in host context (direct $PROTON run, like the retired
 # standable-gui) after repairing prefix state (s: link, VRChat
