@@ -432,10 +432,18 @@ clear_stale_services() {
     local killed=0
     # ps -o args= yields the full command (may contain spaces); first field is pid
     while read -r pid __rest; do
-        case "$__rest" in *wineserver*|*wineboot*|*winedevice*|*xalia*) ;; *) continue;; esac
+        case "$__rest" in *wineserver*|*wineboot*|*winedevice*|*xalia*|*ignition_server*|*Standable.exe*) ;; *) continue;; esac
         cmd="$__rest"
         oldname=$(printf '%s' "$cmd" | sed -nE 's#.*compatibilitytools\.d/([^/]+)/.*#\1#p')
         [ -n "$oldname" ] || oldname=$(printf '%s' "$cmd" | sed -nE 's#.*steamapps/common/(Proton[^/]*)/.*#\1#p')
+        # steam.exe/ignition_server.exe children don't embed the Proton path;
+        # fall back to environ, matching ONLY proton build dirs (never the
+        # game dir - same fix as the launch-hook sweep).
+        if [ -z "$oldname" ] && [ -r "/proc/$pid/environ" ]; then
+            oldname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
+                | head -1 | sed -E 's#.*/##')
+        fi
         [ -n "$oldname" ] || continue
         [ "$oldname" = "$newname" ] && continue
         # only our own prefix: another game using the old build must not be
@@ -448,7 +456,7 @@ clear_stale_services() {
         kill -9 "$pid" 2>/dev/null && killed=1
     done < <(ps -eo pid=,args= 2>/dev/null)
     if [ "$killed" = 1 ]; then
-        say "stale Proton services cleared - you can launch the game now."
+        say "stale Proton services cleared - restart SteamVR before launching, the driver only loads the new build on a fresh boot."
     fi
 }
 
