@@ -672,6 +672,9 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     done
     if [ -n "$_hook" ]; then
         ok "standable_launch_hook.sh installed ($_hook)"
+        case "$_hook" in
+            "$HOME/bin/"*) warn "hook still at old ~/bin path - update Steam Launch Options to: bash \$HOME/.local/bin/standable_launch_hook.sh %command%" ;;
+        esac
         # A stale hook (pre-host-context) still exists+is executable, but chains
         # %command% or runs the old direct path wrong - desktop GUI never shows.
         # Verify it's the current host-context launcher.

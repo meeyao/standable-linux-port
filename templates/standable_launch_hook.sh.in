@@ -160,6 +160,9 @@ mkdir -p "$(dirname "$HOOK_LOG")"
     echo "=== $(date -Iseconds) launch ==="
     echo "proton: $PROTON"
     echo "game:   $GAME_DIR/Standable.exe"
+    case "$0" in
+        "$HOME/bin/"*) echo "NOTE: this hook moved to ~/.local/bin - update Steam Launch Options to: bash \$HOME/.local/bin/standable_launch_hook.sh %command%" ;;
+    esac
 } >> "$HOOK_LOG"
 # Capture the game's own output so a dead-on-arrival GUI shows its error
 # (Steam auth failure, OpenVR init, missing DLL) instead of just the exit code.
