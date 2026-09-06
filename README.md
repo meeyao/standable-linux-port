@@ -1,13 +1,6 @@
 # Standable FBE Linux Patch (Unofficial)
 
-> **You are on the `testing/rc` branch.** This is where all the new work
-> lives. `main` is older and unmaintained - don't use it.
-> [Browse `testing/rc`](https://github.com/meeyao/standable-linux-port/tree/testing/rc).
-> Recent additions here (not on `main`):
-> - [Desktop GUI window while SteamVR runs](https://github.com/meeyao/standable-linux-port/blob/testing/rc/templates/standable_launch_hook.sh.in) - launch hook runs the game in host context
-> - [Runtime Proton switching](https://github.com/meeyao/standable-linux-port/blob/testing/rc/templates/proton_resolve.sh.in) - pick whatever Proton Steam forces, no reinstall
-> - [Stale-process cleanup](https://github.com/meeyao/standable-linux-port/blob/testing/rc/install.sh) - clears leftover wineservers that caused the ~20 s Safe-Mode crash
-> - [Manual install guide](https://github.com/meeyao/standable-linux-port/blob/testing/rc/MANUAL.md) and `--dry-run` for doing it by hand
+> `testing/rc` is the maintained branch. `main` is stale.
 >
 > Note: some code here was written with the help of an LLM. It's been
 > reviewed, but it's worth a skim before you rely on it - especially anything
