@@ -153,7 +153,7 @@ they show the actual launch attempt where `install.log` can't.
 | "Steam authentication failed" dialog | Launch through Steam, not by starting Standable.exe directly |
 | Sliders don't apply in realtime | Re-run `./standable install`, restart SteamVR |
 | T-pose fails intermittently | Re-run `./standable install` (repairs drive links), restart SteamVR |
-| Settings panel background shows a checkerboard pattern in VR | Cosmetic render bug on some Protons, nothing breaks. `proton-cachyos-slr` renders it correctly - switch to it if the pattern bothers you |
+| Settings window shows a checkerboard background on the desktop | Cosmetic render bug on some Protons, nothing breaks, and it resolves on its own (mechanism unknown). `proton-cachyos-slr` renders it correctly from the start - switch to it if the pattern bothers you |
 | "no Proton builds found" | Pass `--proton /path/to/proton`, or install any Proton build |
 | Anything else | Open an issue with the `./standable check` log attached |
 
