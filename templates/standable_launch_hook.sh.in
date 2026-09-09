@@ -115,7 +115,14 @@ fix_vrchat() {
 # SteamVR persistently disables drivers that fail/abort at load ("Not loading
 # driver X because it is disabled in settings"). Re-enable ours BEFORE SteamVR
 # starts so a transient handshake timeout doesn't strand the driver between
-# sessions. Only touches the flag when it is currently false.
+# sessions. A crash also leaves block markers that suppress the driver on the
+# NEXT boot even when safe mode is off ("blocked by a previous safe mode
+# event"):
+#   * config/steamvr.vrsettings  -> driver_standable.blocked_by_safe_mode
+#   * config/vrserver_crash_timestamp.txt  (the safe-mode trigger file)
+# The driver's own launch script clears these too, but it only runs when the
+# driver loads - so a blocked driver never clears itself. The hook runs on
+# every game launch, so clearing here breaks that loop without a reinstall.
 reenable_driver() {
     local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
     [ -f "$cfg" ] || return 0
@@ -128,10 +135,22 @@ reenable_driver() {
 import json, sys
 cfg = sys.argv[1]
 d = json.load(open(cfg))
-if d.get("driver_standable", {}).get("enable", True) is False:
-    d["driver_standable"]["enable"] = True
+changed = False
+ds = d.setdefault("driver_standable", {})
+if ds.pop("blocked_by_safe_mode", None) is not None:
+    changed = True
+if ds.get("enable", True) is False:
+    ds["enable"] = True
+    changed = True
+if d.get("steamvr", {}).get("enableSafeMode", False) is True:
+    d["steamvr"]["enableSafeMode"] = False
+    changed = True
+if changed:
     json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
 PY
+    # The crash-timestamp file is SteamVR's safe-mode trigger; drop it so a
+    # fresh session isn't treated as a repeat of the previous abort.
+    rm -f "@STEAM_ROOT@/config/vrserver_crash_timestamp.txt"
 }
 
 fix_s

@@ -25,12 +25,16 @@ say()  { printf '\033[1;32m==>\033[0m %s\n' "$*";  _log ">>> $*"; }
 warn() { printf '\033[1;33m ->\033[0m %s\n' "$*";  _log "WARN $*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; _log "ERROR $*"; exit 1; }
 _log() { [ -n "${LOG_FILE:-}" ] && printf '%s\n' "$*" >> "$LOG_FILE"; }
-bak()  { # bak <file> - timestamped backup before overwrite
+bak()  { # bak <file> - timestamped backup before overwrite (keeps newest 2)
     if [ -n "$DRY_RUN" ]; then
         [ -f "$1" ] && printf '\033[1;36m # \033[0mcp -n %s %s.bak-%s\n' "$1" "$1" "$STAMP"
         return 0
     fi
     [ -f "$1" ] && cp -n "$1" "$1.bak-$STAMP" 2>/dev/null
+    # Prune older timestamped backups of this file; keep the newest 2.
+    ls -1t "$1".bak-* 2>/dev/null | tail -n +3 | while IFS= read -r _b; do
+        rm -f "$_b"
+    done
 }
 # run - execute a mutating command, or print it verbatim under --dry-run so a
 # user can perform the install by hand. Everything that changes disk state on
@@ -643,6 +647,19 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
         fail=1
     else
         ok "SteamVR safe mode off"
+    fi
+    # A crash leaves markers that suppress the driver on the NEXT boot even
+    # with safe mode off ("blocked by a previous safe mode event"). The
+    # driver's own launch script clears them, but it only runs when the
+    # driver loads - a blocked driver never clears itself. Report it here so
+    # the loop can be broken with a re-install.
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("driver_standable",{}).get("blocked_by_safe_mode") else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
+        bad "driver blocked by a previous safe mode event - won't load next SteamVR boot. Re-run ./standable install (or launch the game once via the hook), then restart SteamVR"
+        fail=1
+    fi
+    if [ -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt" ]; then
+        bad "vrserver crash timestamp present - SteamVR will treat the next boot as a repeat of the last abort. Re-run ./standable install"
+        fail=1
     fi
     # Linux SteamVR 307: "A key component of SteamVR isn't working" often
     # relates to enableLinuxVulkanAsync on Wayland compositors.

@@ -142,6 +142,7 @@ they show the actual launch attempt where `install.log` can't.
 | Symptom | Fix |
 |---|---|
 | SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install` (clears stale wineservers), then restart SteamVR. If it persists, attach `serverhelper.log` |
+| Driver won't load, SteamVR log says "blocked by a previous safe mode event" | A crash leaves block markers behind. Re-run `./standable install` (or launch the game once via the hook - it clears them), then restart SteamVR |
 | Game launches but no GUI | Make sure SteamVR is running and the launch hook is set (see Install); check `./standable check` |
 | "Steam authentication failed" dialog | Launch through Steam, not by starting Standable.exe directly |
 | Sliders don't apply in realtime | Re-run `./standable install`, restart SteamVR |
