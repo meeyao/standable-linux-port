@@ -49,6 +49,9 @@ cd standable-linux-port
 won't have the recent fixes - use `testing/rc` unless you specifically want
 the older stable line.)
 
+Older releases had a `./standable gui` command and a "Standable GUI" desktop
+entry. Both are gone. The launch hook replaces them.
+
 Then launch it through Steam as you would any other title. Start **SteamVR**,
 then click **Play** on Standable. The game can be on any Steam library drive -
 the installer finds it.

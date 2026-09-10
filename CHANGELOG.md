@@ -1,7 +1,27 @@
 # Changelog
 
-## v3.1.0
+## v1.0.0
 
+First major release. testing/rc is the maintained branch.
+
+- The old `./standable gui` command and the "Standable GUI" desktop entry are
+  gone. The launch hook replaces them: set it in Steam Launch Options, then
+  launch through Steam. Without the hook the game still runs, the settings
+  window just shows in VR only.
+- A SteamVR crash left the driver "blocked by a previous safe mode event" on
+  the next boot, and only a re-install cleared it. The launch hook now clears
+  the block markers on every game launch, and `./standable check` reports
+  them instead of failing silently.
+- The wineserver sweep read /proc environ for every wine-ish process on the
+  box, ~5 s per launch on a loaded machine. SteamVR probes a driver twice
+  (~8 s apart) and drops it with VRInitError 105 when the server hasn't
+  handshook yet, so those seconds decided boot success by luck (the
+  intermittent "driver won't load even though nothing crashed"). The sweep
+  now scans candidates with one pgrep shot.
+- `ignition_server` output is captured to `~/.local/state/standable/server.out`;
+  an instant exit-0 left no trace at all before.
+- Timestamped backups are pruned to the newest 2 per file; installs stacked
+  dozens of .bak files in bin/linux64.
 - SteamVR safe-mode no longer hard-blocks standable across sessions. The
   launch script now clears the full block (`driver_standable.blocked_by_safe_mode`
   in `steamvr.vrsettings` and the `vrserver_crash_timestamp.txt` file) before
@@ -15,8 +35,8 @@
   build's leftover wineserver so a Proton switch doesn't leave the app
   un-launchable. Scoped to the game's own prefix via `/proc` environ, so
   unrelated games are left alone. Also sweeps the orphaned
-  `steam.exe`/`ignition_server.exe`
-  tree left when SteamVR force-aborts shutdown.
+  `steam.exe`/`ignition_server.exe` tree left when SteamVR force-aborts
+  shutdown.
 - The launch hook now runs the game in host context (`$PROTON run`) instead of
   chaining Steam's `%command%`. Chaining registered the app as a
   `steam.overlay` client that SteamVR dropped immediately. Direct run keeps the
@@ -39,13 +59,13 @@
   patch (`build/patches/ignition-rpc-timeout.patch`) bounds RPC calls so a
   stalled game driver can't wedge SteamVR's shutdown watchdog either.
 
-## v3.0.2
+## v0.1.2
 
 - Install on any Steam library: the installer finds the game via
   `libraryfolders.vdf`, derives the prefix from that drive's
   `steamapps/compatdata/<APP_ID>`, and points `s:` at the correct library.
 
-## v3.0.1
+## v0.1.1
 
 - Fresh-install SteamVR crash fixed: `driver_standable.dll` needs
   `steam_api64.dll` (Steamworks runtime), which SteamVR doesn't provide. The
@@ -54,7 +74,7 @@
 - `vendor/steam_api64.dll` added to `SHA256SUMS`; origin documented in
   `MANUAL.md`.
 
-## v3.0.0
+## v0.1.0
 
 - Ignition is vendored; the installer deploys `libdriver_ignition.so` and
   `ignition_server.exe` from this repo, no manual Ignition install step.
