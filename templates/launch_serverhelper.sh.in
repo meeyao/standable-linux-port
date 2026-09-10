@@ -232,7 +232,43 @@ logh "launching: $PROTON run $*"
 # config, missing DLL) otherwise leaves no trace at all.
 SERVER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/server.out"
 mkdir -p "$(dirname "$SERVER_LOG")"
-"$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
-_code=$?
-logh "server exit: $_code"
-exit $_code
+# The server must be ALIVE when SteamVR asks the driver for its interfaces.
+# SteamVR probes once shortly after Init and only retries at the next event
+# (its second init, usually the HMD connecting) - whenever that event lands
+# inside the ~4 s a cold Proton boot needs, the interface request reads back
+# as VRInitError 105 and the driver is gone for the session. So the helper
+# supervises: respawn the server (same token, same prefix) for up to
+# ~2.5 min, which means SOMETHING is always running when SteamVR finally
+# probes. Falls back to a plain single run when another helper holds the
+# lock, so shim re-inits can't stack two supervisors or two servers.
+exec 9>>"${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.lock"
+if ! flock -n 9; then
+    # Another helper supervises here; only fall in if no server is running
+    # (its supervisor is between spawn attempts and the lock holder may be
+    # gone). Never pile up a second server.
+    if ! pgrep -f 'ignition_server\.exe' >/dev/null 2>&1; then
+        "$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
+        logh "server exit: $? (standalone, another helper supervising)"
+    fi
+    exit 0
+fi
+# Parent is the vrserver process that loaded the driver shim; when it exits
+# (SteamVR quits) the helper must stop respawning.
+_seppid="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"
+_server_code=0
+for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    # Single-instance guard: never run two servers in this prefix. If one
+    # exists (another helper's spawn, a Steam session), wait it out.
+    if pgrep -f 'ignition_server\.exe' >/dev/null 2>&1; then
+        logh "spawn skipped, server already running (attempt $_attempt)"
+        [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
+        sleep 3
+        continue
+    fi
+    "$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
+    _server_code=$?
+    logh "server exit: $_server_code (attempt $_attempt)"
+    [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
+    sleep 3
+done
+exit "$_server_code"
