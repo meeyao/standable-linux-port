@@ -241,12 +241,23 @@ mkdir -p "$(dirname "$SERVER_LOG")"
 # ~2.5 min, which means SOMETHING is always running when SteamVR finally
 # probes. Falls back to a plain single run when another helper holds the
 # lock, so shim re-inits can't stack two supervisors or two servers.
+# Single-instance check for THE SERVER. The naive `pgrep ignition_server.exe`
+# also matches this helper's own argv (launch_serverhelper.sh .../ignition_
+# server.exe), so the guard must match the Proton/wine process tree only:
+#   python3 .../proton run  .../ignition_server.exe ...
+#   c:\windows\system32\steam.exe  .../ignition_server.exe ...
+_server_running() {
+    pgrep -f 'proton run .*ignition_server\.exe' >/dev/null 2>&1 && return 0
+    pgrep -f 'steam\.exe .*ignition_server\.exe' >/dev/null 2>&1 && return 0
+    return 1
+}
+
 exec 9>>"${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.lock"
 if ! flock -n 9; then
     # Another helper supervises here; only fall in if no server is running
     # (its supervisor is between spawn attempts and the lock holder may be
     # gone). Never pile up a second server.
-    if ! pgrep -f 'ignition_server\.exe' >/dev/null 2>&1; then
+    if ! _server_running; then
         "$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
         logh "server exit: $? (standalone, another helper supervising)"
     fi
@@ -258,8 +269,8 @@ _seppid="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"
 _server_code=0
 for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     # Single-instance guard: never run two servers in this prefix. If one
-    # exists (another helper's spawn, a Steam session), wait it out.
-    if pgrep -f 'ignition_server\.exe' >/dev/null 2>&1; then
+    # exists (another helper's spawn), wait it out instead of stacking.
+    if _server_running; then
         logh "spawn skipped, server already running (attempt $_attempt)"
         [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
         sleep 3
