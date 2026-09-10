@@ -248,7 +248,7 @@ flags, and kills stale foreign-Proton wineservers each boot. Goes in
 
 `standable_launch_hook.sh` - set as the game's Steam Launch Options. Runs the
 game in host context so the desktop settings window shows while SteamVR runs.
-Goes in `~/bin/`.
+Goes in `~/.local/bin/` (older installs used `~/bin/`, still supported).
 
 Generate each with sed (this is the substitution the installer does):
 
@@ -266,16 +266,16 @@ sed "${vars[@]}" templates/proton_resolve.sh.in > "$GAME/bin/linux64/proton_reso
 sed "${vars[@]}" templates/win_vrpath.sh.in > "$GAME/bin/linux64/win_vrpath.sh"
 sed "${vars[@]}" templates/proton_python.sh.in > "$GAME/bin/linux64/python3"
 sed "${vars[@]}" templates/ignition.json.in > "$GAME/bin/linux64/ignition.json"
-sed "${vars[@]}" templates/standable_launch_hook.sh.in > "$HOME/bin/standable_launch_hook.sh"
+sed "${vars[@]}" templates/standable_launch_hook.sh.in > "$HOME/.local/bin/standable_launch_hook.sh"
 
 chmod +x "$GAME/bin/linux64/launch_serverhelper.sh" \
         "$GAME/bin/linux64/win_vrpath.sh" \
         "$GAME/bin/linux64/python3" \
-        "$HOME/bin/standable_launch_hook.sh"
+        "$HOME/.local/bin/standable_launch_hook.sh"
 ```
 
 Then set the hook in Steam: right-click the game → Properties → Launch
-Options → `bash ~/bin/standable_launch_hook.sh %command%`.
+Options → `bash ~/.local/bin/standable_launch_hook.sh %command%`.
 
 ## 10. VRChat auto-calibration (optional)
 
@@ -309,7 +309,7 @@ rm -f "$GAME/bin/linux64/driver_standable.so" \
       "$GAME/bin/linux64/python3" \
       "$GAME/bin/linux64/proton_resolve.sh" \
       "$GAME/bin/linux64/win_vrpath.sh" \
-      "$HOME/bin/standable_launch_hook.sh" \
+      "$HOME/.local/bin/standable_launch_hook.sh" \
       "$PFX/drive_c/vr_bootstrap.exe" \
       "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe" \
       "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe"

@@ -37,7 +37,7 @@ Usage: ./standable <command>
 Typical flow:
   ./standable install
   # set the launch hook in Steam Launch Options:
-  #   bash ~/bin/standable_launch_hook.sh %command%
+  #   bash ~/.local/bin/standable_launch_hook.sh %command%
   # then start SteamVR and launch Standable from Steam to get the desktop
   # settings window. The hook is what shows the desktop GUI and keeps the
   # game and driver on the same Proton/prefix.

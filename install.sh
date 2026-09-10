@@ -25,12 +25,16 @@ say()  { printf '\033[1;32m==>\033[0m %s\n' "$*";  _log ">>> $*"; }
 warn() { printf '\033[1;33m ->\033[0m %s\n' "$*";  _log "WARN $*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; _log "ERROR $*"; exit 1; }
 _log() { [ -n "${LOG_FILE:-}" ] && printf '%s\n' "$*" >> "$LOG_FILE"; }
-bak()  { # bak <file> - timestamped backup before overwrite
+bak()  { # bak <file> - timestamped backup before overwrite (keeps newest 2)
     if [ -n "$DRY_RUN" ]; then
         [ -f "$1" ] && printf '\033[1;36m # \033[0mcp -n %s %s.bak-%s\n' "$1" "$1" "$STAMP"
         return 0
     fi
     [ -f "$1" ] && cp -n "$1" "$1.bak-$STAMP" 2>/dev/null
+    # Prune older timestamped backups of this file; keep the newest 2.
+    ls -1t "$1".bak-* 2>/dev/null | tail -n +3 | while IFS= read -r _b; do
+        rm -f "$_b"
+    done
 }
 # run - execute a mutating command, or print it verbatim under --dry-run so a
 # user can perform the install by hand. Everything that changes disk state on
@@ -349,7 +353,9 @@ find_proton_builds() {
             < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
     }
     for lib in "${libs[@]}"; do
-        for d in "$lib/compatibilitytools.d"/* "$lib/steamapps/common/Proton -"*; do
+        # NOTE: built-ins are "Proton 10.0" (no dash) as well as
+        # "Proton - Experimental" - "Proton -*" alone misses versioned builds.
+        for d in "$lib/compatibilitytools.d"/* "$lib"/steamapps/common/Proton*; do
             p="$d/proton"
             [ -x "$p" ] && [ -d "$d/files/lib/wine" ] && printf '%s|%s\n' "$(basename "$d")" "$p"
         done
@@ -430,10 +436,18 @@ clear_stale_services() {
     local killed=0
     # ps -o args= yields the full command (may contain spaces); first field is pid
     while read -r pid __rest; do
-        case "$__rest" in *wineserver*|*wineboot*|*winedevice*|*xalia*) ;; *) continue;; esac
+        case "$__rest" in *wineserver*|*wineboot*|*winedevice*|*xalia*|*ignition_server*|*Standable.exe*) ;; *) continue;; esac
         cmd="$__rest"
         oldname=$(printf '%s' "$cmd" | sed -nE 's#.*compatibilitytools\.d/([^/]+)/.*#\1#p')
         [ -n "$oldname" ] || oldname=$(printf '%s' "$cmd" | sed -nE 's#.*steamapps/common/(Proton[^/]*)/.*#\1#p')
+        # steam.exe/ignition_server.exe children don't embed the Proton path;
+        # fall back to environ, matching ONLY proton build dirs (never the
+        # game dir - same fix as the launch-hook sweep).
+        if [ -z "$oldname" ] && [ -r "/proc/$pid/environ" ]; then
+            oldname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
+                | head -1 | sed -E 's#.*/##')
+        fi
         [ -n "$oldname" ] || continue
         [ "$oldname" = "$newname" ] && continue
         # only our own prefix: another game using the old build must not be
@@ -446,7 +460,7 @@ clear_stale_services() {
         kill -9 "$pid" 2>/dev/null && killed=1
     done < <(ps -eo pid=,args= 2>/dev/null)
     if [ "$killed" = 1 ]; then
-        say "stale Proton services cleared - you can launch the game now."
+        say "stale Proton services cleared - restart SteamVR before launching, the driver only loads the new build on a fresh boot."
     fi
 }
 
@@ -634,6 +648,19 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     else
         ok "SteamVR safe mode off"
     fi
+    # A crash leaves markers that suppress the driver on the NEXT boot even
+    # with safe mode off ("blocked by a previous safe mode event"). The
+    # driver's own launch script clears them, but it only runs when the
+    # driver loads - a blocked driver never clears itself. Report it here so
+    # the loop can be broken with a re-install.
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("driver_standable",{}).get("blocked_by_safe_mode") else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
+        bad "driver blocked by a previous safe mode event - won't load next SteamVR boot. Re-run ./standable install (or launch the game once via the hook), then restart SteamVR"
+        fail=1
+    fi
+    if [ -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt" ]; then
+        bad "vrserver crash timestamp present - SteamVR will treat the next boot as a repeat of the last abort. Re-run ./standable install"
+        fail=1
+    fi
     # Linux SteamVR 307: "A key component of SteamVR isn't working" often
     # relates to enableLinuxVulkanAsync on Wayland compositors.
     if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("steamvr",{}).get("enableLinuxVulkanAsync",False) else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
@@ -654,13 +681,22 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
-    if [ -x "$HOME/bin/standable_launch_hook.sh" ]; then
-        ok "~/bin/standable_launch_hook.sh installed"
+    # Launch hook lives in ~/.local/bin (XDG, hidden); older installs used
+    # ~/bin - accept either so existing Steam launch options keep working.
+    _hook=""
+    for _h in "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/bin/standable_launch_hook.sh"; do
+        [ -x "$_h" ] && { _hook="$_h"; break; }
+    done
+    if [ -n "$_hook" ]; then
+        ok "standable_launch_hook.sh installed ($_hook)"
+        case "$_hook" in
+            "$HOME/bin/"*) warn "hook still at old ~/bin path - update Steam Launch Options to: bash \$HOME/.local/bin/standable_launch_hook.sh %command%" ;;
+        esac
         # A stale hook (pre-host-context) still exists+is executable, but chains
         # %command% or runs the old direct path wrong - desktop GUI never shows.
         # Verify it's the current host-context launcher.
-        if grep -q 'exec "\$PROTON" run "\$GAME_DIR/Standable.exe"' "$HOME/bin/standable_launch_hook.sh" \
-           || grep -q '"$PROTON" run "$GAME_DIR/Standable.exe"' "$HOME/bin/standable_launch_hook.sh"; then
+        if grep -q 'exec "\$PROTON" run "\$GAME_DIR/Standable.exe"' "$_hook" \
+           || grep -q '"$PROTON" run "$GAME_DIR/Standable.exe"' "$_hook"; then
             ok "launch hook is the host-context (desktop GUI) version"
         else
             bad "launch hook is stale (not host-context) - re-run ./standable install, desktop GUI won't show"
@@ -949,7 +985,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     detect_game_dir || die "game not found"
     pick_prefix
     say "Removing port artifacts…"
-    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
     rm -fv "$HOME/.local/share/icons/standable.png"
     rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     rm -fv "$PFX/dosdevices/s:"
@@ -1166,7 +1202,7 @@ gen() { # gen <template> <dest> - substitute placeholders, write dest
         -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
         "$REPO/templates/$1" > "$2"
 }
-run mkdir -p "$HOME/bin"
+run mkdir -p "$HOME/.local/bin"
 bak "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 run chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
@@ -1185,9 +1221,20 @@ run chmod +x "$GAME_DIR/bin/linux64/python3"
 gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
 # retire legacy GUI launcher from older installs
 run rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/Standable GUI.desktop" "$HOME/Desktop/standable-gui.desktop"
-bak "$HOME/bin/standable_launch_hook.sh"
-gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
-run chmod +x "$HOME/bin/standable_launch_hook.sh"
+# Launch hook goes in ~/.local/bin (XDG, hidden - no ~/ clutter). Older
+# installs used ~/bin; keep that copy in sync too so existing Steam launch
+# options pointing there keep working.
+bak "$HOME/.local/bin/standable_launch_hook.sh"
+gen standable_launch_hook.sh.in "$HOME/.local/bin/standable_launch_hook.sh"
+run chmod +x "$HOME/.local/bin/standable_launch_hook.sh"
+if [ -f "$HOME/bin/standable_launch_hook.sh" ]; then
+    bak "$HOME/bin/standable_launch_hook.sh"
+    gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
+    run chmod +x "$HOME/bin/standable_launch_hook.sh"
+    say "Note: launch hook moved to ~/.local/bin - update Steam Launch Options to:"
+    say "  bash \$HOME/.local/bin/standable_launch_hook.sh %command%"
+    say "(old ~/bin copy kept working until you switch; uninstall removes both)"
+fi
 
 # --no-safemode: SteamVR drops into Safe Mode after a driver crash, which
 # hides add-ons (incl. standable). Persist enableSafeMode=false so it doesn't
@@ -1231,7 +1278,7 @@ else
     Start SteamVR, then click Play on Standable.
     To get the settings window on your desktop while SteamVR runs:
       Right-click Standable in Steam → Properties → Launch Options, set:
-        bash $HOME/bin/standable_launch_hook.sh %command%
+        bash $HOME/.local/bin/standable_launch_hook.sh %command%
 
   Verify anytime with:  $REPO/install.sh --check
   Log for this run:     $LOG_FILE

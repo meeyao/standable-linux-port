@@ -103,15 +103,26 @@ same_prefix() {
 # prefix must not be disrupted), as are processes from other prefixes (an
 # unrelated game using the same Proton build must not be disrupted either).
 clear_foreign_wineservers() {
-    local home_dir home_name pid args pname
+    local home_dir home_name
     home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
     home_name=""
     # home proton dir is either .../compatibilitytools.d/<name> or .../steamapps/common/<name>
     home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && return 0
-    # also accept the Steam-VR-prefixed built-ins like "Proton - Experimental"
-    ps -eo pid=,args= 2>/dev/null | while read -r pid rest; do
+    # Candidate scan: ONE pgrep shot. The earlier version read
+    # /proc/<pid>/environ for every wine-ish process on the box, which cost
+    # ~5 s on a loaded system; that alone pushed the server launch outside
+    # SteamVR's two-probe driver window (probe 2 fires ~8 s after probe 1),
+    # and a late handshake reads back as VRInitError 105 / a driver that
+    # "won't load" at boot. Candidates are usually 0-3 PIDs.
+    pgrep -af 'wine|proton|ignition_server' 2>/dev/null | while IFS= read -r line; do
+        pid="${line%% *}"; rest="${line#* }"
+        [ -z "$rest" ] && continue
+        case "$rest" in
+            *wine*|*proton*|*ignition_server*) : ;;
+            *) continue ;;
+        esac
         pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
         [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
         # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
@@ -127,10 +138,6 @@ clear_foreign_wineservers() {
                 | head -1 | sed -E 's#.*/##')
         fi
         [ -z "$pname" ] && continue
-        case "$rest" in
-            *wine*|*proton*|*ignition_server*) : ;;
-            *) continue ;;
-        esac
         [ "$pname" = "$home_name" ] && continue
         # only our own prefix: a foreign-proton wineserver elsewhere is harmless
         same_prefix "$pid" || continue
@@ -221,7 +228,11 @@ PROTON_LOG=1
 PROTON_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/standable/proton-server.log"
 export PROTON_LOG PROTON_LOG_FILE
 logh "launching: $PROTON run $*"
-"$PROTON" run "$@"
+# Capture the server's own output too: an instant exit-0 (no handshake, bad
+# config, missing DLL) otherwise leaves no trace at all.
+SERVER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/server.out"
+mkdir -p "$(dirname "$SERVER_LOG")"
+"$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
 _code=$?
 logh "server exit: $_code"
 exit $_code
