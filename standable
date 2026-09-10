@@ -1,5 +1,5 @@
 #!/bin/bash
-# standable — front door for the Standable FBE Linux patch.
+# standable - front door for the Standable FBE Linux patch.
 # Usage: ./standable [install|check|uninstall] [options]
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,10 +19,10 @@ case "${1:-help}" in
         exec "$DIR/install.sh" --proton "$2"
         ;;
     --version|-v)
-        echo "standable v3.1.0"; exit 0;;
+        echo "standable v1.0.0"; exit 0;;
     help|--help|-h|*)
         cat <<EOF
-Standable Full Body Estimation — Linux patch
+Standable Full Body Estimation - Linux patch
 
 Usage: ./standable <command>
 
