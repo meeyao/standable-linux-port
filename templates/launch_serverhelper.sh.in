@@ -280,6 +280,10 @@ for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     _server_code=$?
     logh "server exit: $_server_code (attempt $_attempt)"
     [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
-    sleep 3
+    # No long sleep: the wineserver dies ~3 s after its last client exits, and
+    # respawning into a dead prefix costs a full ~5 s Proton cold boot - more
+    # than SteamVR's probe gap. A fast respawn reuses the still-alive
+    # wineserver and reaches its handshake in ~2 s.
+    sleep 1
 done
 exit "$_server_code"
