@@ -88,81 +88,11 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-# same_prefix - true when pid belongs to THIS prefix: Proton-launched processes
-# inherit STEAM_COMPAT_DATA_PATH in their environment (visible in
-# /proc/<pid>/environ). Scoping kills to our own prefix avoids disrupting
-# unrelated games that happen to use the same Proton build. When the
-# environment can't be read, return true (fail-open: a foreign wineserver
-# holding our prefix would otherwise wedge the driver past the watchdog).
-# The path is normalized (strip a leading /run/host) because SteamVR's Sniper
-# sandbox can present host paths as /run/host/home/... while we were baked
-# with the plain /home/... form.
-same_prefix() {
-    local env want
-    [ -n "$1" ] || return 1
-    [ -r "/proc/$1/environ" ] || return 1
-    want="${STEAM_COMPAT_DATA_PATH#/run/host}"
-    env=$(tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null \
-        | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
-        | grep -x "STEAM_COMPAT_DATA_PATH=$want")
-    [ -n "$env" ]
-}
-
-# clear_foreign_wineservers - the Ignition server must start in the prefix that
-# THIS launch script's Proton owns. If another Proton build was ever launched in
-# the same prefix and left a wineserver (or orphaned wineboot/winedevice/xalia
-# clients) behind, the new wineserver cannot acquire the prefix lock and the
-# driver's handshake stalls past SteamVR's ~21 s watchdog, hard-crashing it into
-# safe mode. Kill any Wine process whose Proton differs from the one we run, so
-# the driver launch is never blocked by cross-Proton prefix contention. Processes
-# from OUR OWN Proton are left untouched (a running game/driver in the same
-# prefix must not be disrupted), as are processes from other prefixes (an
-# unrelated game using the same Proton build must not be disrupted either).
-clear_foreign_wineservers() {
-    local home_dir home_name
-    home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
-    home_name=""
-    # home proton dir is either .../compatibilitytools.d/<name> or .../steamapps/common/<name>
-    home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
-    [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
-    [ -z "$home_name" ] && return 0
-    # Candidate scan: ONE pgrep shot. The earlier version read
-    # /proc/<pid>/environ for every wine-ish process on the box, which cost
-    # ~5 s on a loaded system; that alone pushed the server launch outside
-    # SteamVR's two-probe driver window (probe 2 fires ~8 s after probe 1),
-    # and a late handshake reads back as VRInitError 105 / a driver that
-    # "won't load" at boot. Candidates are usually 0-3 PIDs.
-    pgrep -af 'wine|proton|ignition_server' 2>/dev/null | while IFS= read -r line; do
-        pid="${line%% *}"; rest="${line#* }"
-        [ -z "$rest" ] && continue
-        case "$rest" in
-            *wine*|*proton*|*ignition_server*) : ;;
-            *) continue ;;
-        esac
-        pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
-        [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
-        # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
-        # path; its parent is the Proton python/proton process, so fall back to
-        # matching the running wine tree's Proton home. Match ONLY the proton
-        # build dir - the broad `steamapps/common/<dir>` pattern also matches
-        # the game dir (STEAM_COMPAT_INSTALL_PATH=.../Standable Full Body
-        # Estimation), which made the driver's own server look "foreign" and
-        # got it killed at every game launch.
-        if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
-            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
-                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
-                | head -1 | sed -E 's#.*/##')
-        fi
-        [ -z "$pname" ] && continue
-        [ "$pname" = "$home_name" ] && continue
-        # only our own prefix: a foreign-proton wineserver elsewhere is harmless
-        same_prefix "$pid" || continue
-        # per-pid kill (not pkill by build name): each foreign process in our
-        # prefix is visited by this loop, so no broad pattern is needed and
-        # other prefixes are never touched
-        kill -9 "$pid" 2>/dev/null
-    done
-}
+# Stale-wineserver sweep lives in sweep.sh (shared with the launch hook);
+# it needs PROTON + STEAM_COMPAT_DATA_PATH, both set above.
+if [ -f "$SCRIPT_DIR/sweep.sh" ]; then
+    . "$SCRIPT_DIR/sweep.sh"
+fi
 
 # Fix SteamVR state: a transient handshake timeout can leave the driver
 # disabled or SteamVR in safe mode. Clear every blocker before driver load so

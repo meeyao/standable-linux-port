@@ -18,6 +18,10 @@
   happened to boot with a compatible CWD and failed with silent exit 1
   (vrserver 105s, no driver) otherwise. Proven with loader traces showing
   the miss (`.../common/win64/...`) vs the hit (`.../bin/win64/...`).
+- The stale-wineserver sweep lived as three copies (hook, driver shim,
+  installer) and had already drifted once. Hook and shim now source one
+  shared `sweep.sh` (same pgrep-based scan, same fail-closed prefix guard);
+  the installer's wider install-time sweep stays separate by design.
 
 ## v1.0.0
 

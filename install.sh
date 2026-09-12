@@ -423,6 +423,10 @@ pick_proton() {
     [ -d "$PROTON" ] && [ -x "$PROTON/proton" ] && PROTON="$PROTON/proton"
 }
 
+# clear_stale_services - install-time sweep. Deliberately NOT the shared
+# sweep.sh: this one also reaps the game exe/wineboot/winedevice with user
+# messaging, while sweep.sh is the quiet boot-time foreign-only guard shared
+# by the hook and the driver shim.
 # clear_stale_services - when switching Proton builds the OLD build's wineserver
 # (and the game/driver it hosts) keeps running and blocks the new one: Steam's
 # "Play" appears to do nothing because the app is considered already running /
@@ -780,6 +784,9 @@ PY
         [ -f "$GAME_DIR/bin/linux64/proton_resolve.sh" ] \
             && ok "proton_resolve.sh deployed (runtime Proton switching)" \
             || bad "proton_resolve.sh missing - re-run install, Proton switches need reinstalls"
+        [ -f "$GAME_DIR/bin/linux64/sweep.sh" ] \
+            && ok "sweep.sh deployed (shared stale-wineserver sweep)" \
+            || bad "sweep.sh missing - re-run install, hook/driver fall back to no sweep"
         [ -f "$GAME_DIR/bin/linux64/win_vrpath.sh" ] \
             && ok "win_vrpath.sh deployed (Windows-side driver path repair)" \
             || bad "win_vrpath.sh missing - re-run install"
@@ -1060,6 +1067,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -fv "$GAME_DIR/bin/win64/steam_api64.dll"
     rm -fv "$GAME_DIR/bin/linux64/python3"
     rm -fv "$GAME_DIR/bin/linux64/proton_resolve.sh"
+    rm -fv "$GAME_DIR/bin/linux64/sweep.sh"
     rm -fv "$GAME_DIR/bin/linux64/win_vrpath.sh"
     # Restore the user's original SteamVR settings (backed up before our
     # first boot-time modification), and drop the crash-timestamp trigger.
@@ -1292,6 +1300,9 @@ gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 run chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 # shared Proton resolver (sourced by launch_serverhelper.sh + launch hook)
 gen proton_resolve.sh.in "$GAME_DIR/bin/linux64/proton_resolve.sh"
+# shared stale-wineserver sweep (sourced by launch_serverhelper.sh + launch
+# hook instead of a copy in each - the copies already drifted once)
+gen sweep.sh.in "$GAME_DIR/bin/linux64/sweep.sh"
 # Windows-side driver registration repair (run by both launch scripts)
 run cp "$REPO/templates/win_vrpath.sh.in" "$GAME_DIR/bin/linux64/win_vrpath.sh"
 run chmod +x "$GAME_DIR/bin/linux64/win_vrpath.sh"

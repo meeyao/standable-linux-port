@@ -278,6 +278,7 @@ vars=(-e "s|@GAME_DIR@|$GAME|g"
 
 sed "${vars[@]}" templates/launch_serverhelper.sh.in > "$GAME/bin/linux64/launch_serverhelper.sh"
 sed "${vars[@]}" templates/proton_resolve.sh.in > "$GAME/bin/linux64/proton_resolve.sh"
+sed "${vars[@]}" templates/sweep.sh.in > "$GAME/bin/linux64/sweep.sh"
 sed "${vars[@]}" templates/win_vrpath.sh.in > "$GAME/bin/linux64/win_vrpath.sh"
 sed "${vars[@]}" templates/proton_python.sh.in > "$GAME/bin/linux64/python3"
 sed "${vars[@]}" templates/ignition.json.in > "$GAME/bin/linux64/ignition.json"

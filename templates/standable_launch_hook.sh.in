@@ -58,49 +58,11 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-# clear_foreign_wineservers - same guard as the driver shim: a wineserver from
-# a PREVIOUS Proton holding this prefix blocks the new Proton ("version
-# mismatch ... wrong wineserver still running" → instant exit). Seen when
-# switching builds without a Steam restart. Also catches the orphaned
-# steam.exe/ignition_server.exe Wine tree left behind when SteamVR force-aborts
-# shutdown (its launcher dies, the Wine children reparent to systemd and linger
-# holding the prefix). Kill only Wine processes from another Proton build inside
-# OUR prefix; ours and other prefixes untouched.
-clear_foreign_wineservers() {
-    local home_dir home_name pid rest pname
-    home_dir="$(cd "$(dirname "$PROTON")" 2>/dev/null && pwd)"
-    [ -n "$home_dir" ] || return 0
-    home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
-    [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
-    [ -z "$home_name" ] && return 0
-    ps -eo pid=,args= 2>/dev/null | while read -r pid rest; do
-        case "$rest" in *wine*|*proton*|*ignition_server*) : ;; *) continue ;; esac
-        pname=$(printf '%s' "$rest" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/.*#\1#p')
-        [ -z "$pname" ] && pname=$(printf '%s' "$rest" | sed -nE 's#.*/steamapps/common/(Proton[^/]*)/.*#\1#p')
-        # a `steam.exe .../ignition_server.exe` child doesn't embed the Proton
-        # path; its parent is the Proton python/proton process, so fall back to
-        # matching the running wine tree's Proton home. Match ONLY the proton
-        # build dir - the broad `steamapps/common/<dir>` pattern also matches
-        # the game dir (STEAM_COMPAT_INSTALL_PATH=.../Standable Full Body
-        # Estimation), which made the driver's own server look "foreign" and
-        # got it killed at every game launch.
-        if [ -z "$pname" ] && [ -r "/proc/$pid/environ" ]; then
-            pname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
-                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
-                | head -1 | sed -E 's#.*/##')
-        fi
-        [ -z "$pname" ] && continue
-        [ "$pname" = "$home_name" ] && continue
-        # only kill when we can confirm it's OUR prefix - fail closed. Killing
-        # a process whose environ we can't read risks nuking an unrelated Wine
-        # app (Bottles/Lutris/another game) that happens to match the pattern.
-        [ -r "/proc/$pid/environ" ] || continue
-        tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
-            | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
-            | grep -qx "STEAM_COMPAT_DATA_PATH=${STEAM_COMPAT_DATA_PATH#/run/host}" || continue
-        kill -9 "$pid" 2>/dev/null
-    done
-}
+# Stale-wineserver sweep lives in sweep.sh (shared with the driver shim);
+# it needs PROTON + STEAM_COMPAT_DATA_PATH, both set above.
+if [ -f "$GAME_DIR/bin/linux64/sweep.sh" ]; then
+    . "$GAME_DIR/bin/linux64/sweep.sh"
+fi
 clear_foreign_wineservers
 
 fix_vrchat() {
