@@ -320,24 +320,44 @@ Delete what you added, in reverse:
 rm -f "$GAME/bin/linux64/driver_standable.so" \
       "$GAME/bin/linux64/ignition_server.exe" \
       "$GAME/bin/linux64/ignition_bridge.dll" \
+      "$GAME/bin/linux64/launch_serverhelper.sh" \
+      "$GAME/bin/linux64/ignition.json" \
+      "$GAME/bin/linux64/wine_psvr2_hidraw.reg" \
       "$GAME/bin/linux64/steam_api64.dll" \
       "$GAME/bin/win64/steam_api64.dll" \
       "$GAME/bin/linux64/python3" \
       "$GAME/bin/linux64/proton_resolve.sh" \
+      "$GAME/bin/linux64/sweep.sh" \
       "$GAME/bin/linux64/win_vrpath.sh" \
       "$HOME/.local/bin/standable_launch_hook.sh" \
       "$PFX/drive_c/vr_bootstrap.exe" \
       "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe" \
-      "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe"
+      "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe" \
+      "$PFX/drive_c/vrclient/bin/vrclient.dll" \
+      "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
 rm -f "$PFX/dosdevices/s:"
 rm -f "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
 ```
 
-Remove the game entry from `external_drivers` in
-`~/.config/openvr/openvrpaths.vrpath` and delete the `SteamPath` value from
-`HKCU\Software\Valve\Steam` if you added it (step 5). Your original
-`steamvr.vrsettings` is kept at `steamvr.vrsettings.standable.bak` if the
-scripts modified it - restore it with `mv` to undo.
+Remove every Standable entry (Linux path and `S:\` form) from
+`external_drivers` in `~/.config/openvr/openvrpaths.vrpath`:
+
+```sh
+python3 - <<'PY'
+import json, os
+p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
+d = json.load(open(p))
+d['external_drivers'] = [e for e in d.get('external_drivers') or []
+                         if 'Standable' not in e]
+json.dump(d, open(p, 'w'), indent=2)
+PY
+```
+
+Delete the `SteamPath` value from `HKCU\Software\Valve\Steam` if you added
+it (step 5). Quit SteamVR first - deleting `driver_standable.so` out from
+under a running vrserver crashes it. Your original `steamvr.vrsettings` is
+kept at `steamvr.vrsettings.standable.bak` if the scripts modified it -
+restore it with `mv` to undo.
 
 ## Why these files exist
 

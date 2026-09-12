@@ -22,6 +22,12 @@
   installer) and had already drifted once. Hook and shim now source one
   shared `sweep.sh` (same pgrep-based scan, same fail-closed prefix guard);
   the installer's wider install-time sweep stays separate by design.
+- `--uninstall` actually uninstalls now: it removes the driver shim, server,
+  bridge, launch scripts, shims, vrclient copies and `.bak` files (leaving
+  the game's own files alone), strips both vrpath seed entries, deletes the
+  `SteamPath` registry value with verification, and refuses while SteamVR
+  runs (deleting a loaded driver crashes it). Previously it left the driver
+  installed and working. Also dry-run safe (it wasn't - `rm`/`mv` executed).
 
 ## v1.0.0
 

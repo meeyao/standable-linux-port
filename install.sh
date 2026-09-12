@@ -1057,32 +1057,129 @@ if [ "${1:-}" = "--uninstall" ]; then
     detect_steam_root || die "Steam root not found"
     detect_game_dir || die "game not found"
     pick_prefix
+    WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
+    # Never pull a loaded driver out from under a running vrserver: deleting
+    # driver_standable.so mid-session crashes it. Refuse while it runs.
+    if pgrep -x vrserver >/dev/null 2>&1; then
+        if [ -n "$DRY_RUN" ]; then
+            warn "SteamVR is running - a real run would refuse until it quits"
+        elif [ -z "${ASSUME_YES:-}" ]; then
+            die "SteamVR is running - quit it first so the loaded driver can unload, then re-run"
+        else
+            warn "SteamVR is running - removing its loaded driver will crash it"
+        fi
+    fi
     say "Removing port artifacts…"
-    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
-    rm -fv "$HOME/.local/share/icons/standable.png"
-    rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
-    rm -fv "$PFX/dosdevices/s:"
-    rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
-    rm -fv "$GAME_DIR/bin/linux64/steam_api64.dll"
-    rm -fv "$GAME_DIR/bin/win64/steam_api64.dll"
-    rm -fv "$GAME_DIR/bin/linux64/python3"
-    rm -fv "$GAME_DIR/bin/linux64/proton_resolve.sh"
-    rm -fv "$GAME_DIR/bin/linux64/sweep.sh"
-    rm -fv "$GAME_DIR/bin/linux64/win_vrpath.sh"
+    run rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+    run rm -fv "$HOME/.local/share/icons/standable.png"
+    run rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
+    run rm -fv "$PFX/dosdevices/s:"
+    run rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
+    # Prefix shims: we created this Steam tree (fresh prefixes have none), so
+    # restore any pre-existing file from our .bak, else remove the stub.
+    for _shim in vrpathreg.exe vrmonitor.exe; do
+        _f="$WIN64/$_shim"
+        _bak=$(ls -1t "$_f".bak-* 2>/dev/null | head -1)
+        if [ -n "$_bak" ]; then
+            run mv -f "$_bak" "$_f"
+            [ -n "$DRY_RUN" ] || say "restored $_f from backup"
+        else
+            run rm -fv "$_f"
+        fi
+    done
+    unset _shim _f _bak
+    # Deployed vrclient copies (Proton maintains this dir too - removing ours
+    # is harmless either way).
+    run rm -fv "$PFX/drive_c/vrclient/bin"/vrclient*.dll*
+    # Everything the installer added under bin/linux64, plus our .bak files.
+    # Untouched: the game's own files (Standable.exe, openvr_api.dll,
+    # vrclient_x64.dll, and bin/win64/driver_standable.dll).
+    run rm -fv "$GAME_DIR/bin/linux64/driver_standable.so" \
+        "$GAME_DIR/bin/linux64/ignition_server.exe" \
+        "$GAME_DIR/bin/linux64/ignition_bridge.dll" \
+        "$GAME_DIR/bin/linux64/launch_serverhelper.sh" \
+        "$GAME_DIR/bin/linux64/ignition.json" \
+        "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg" \
+        "$GAME_DIR/bin/linux64/steam_api64.dll" \
+        "$GAME_DIR/bin/win64/steam_api64.dll" \
+        "$GAME_DIR/bin/linux64/python3" \
+        "$GAME_DIR/bin/linux64/proton_resolve.sh" \
+        "$GAME_DIR/bin/linux64/sweep.sh" \
+        "$GAME_DIR/bin/linux64/win_vrpath.sh"
+    run rm -f "$GAME_DIR/bin/linux64"/driver_standable.so.bak-* \
+        "$GAME_DIR/bin/linux64"/ignition_server.exe.bak-* \
+        "$GAME_DIR/bin/linux64"/ignition_bridge.dll.bak-* \
+        "$GAME_DIR/bin/linux64"/launch_serverhelper.sh.bak-* \
+        "$GAME_DIR/bin/linux64"/ignition.json.bak-* \
+        "$GAME_DIR/bin/linux64"/wine_psvr2_hidraw.reg.bak-* \
+        "$GAME_DIR/bin/linux64"/steam_api64.dll.bak-* \
+        "$GAME_DIR/bin/win64"/steam_api64.dll.bak-* \
+        "$GAME_DIR/bin/linux64"/python3.bak-* \
+        "$GAME_DIR/bin/linux64"/proton_resolve.sh.bak-* \
+        "$GAME_DIR/bin/linux64"/sweep.sh.bak-* \
+        "$GAME_DIR/bin/linux64"/win_vrpath.sh.bak-*
+    # vrpath seed: strip our entries (Linux path and S:\ form), keep the rest.
+    if [ -n "$DRY_RUN" ]; then
+        printf '\033[1;36m # \033[0mpython3 removes Standable entries from ~/.config/openvr/openvrpaths.vrpath\n'
+    else
+        python3 - <<'PYEOF' 2>/dev/null
+import json, os
+p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
+try:
+    data = json.load(open(p))
+except Exception:
+    raise SystemExit(0)
+ed = data.get('external_drivers') or []
+new_ed = [e for e in ed if 'Standable' not in e]
+if len(new_ed) != len(ed):
+    data['external_drivers'] = new_ed
+    json.dump(data, open(p, 'w'), indent=2)
+    print("  removed %d Standable seed entr%s" % (len(ed) - len(new_ed), 'y' if len(ed) - len(new_ed) == 1 else 'ies'))
+PYEOF
+    fi
+    # SteamPath registry value: drop it by editing user.reg directly (no
+    # Proton boot needed). Only touches the exact value the installer sets;
+    # verifies afterwards and falls back to manual instructions.
+    if [ -n "$DRY_RUN" ]; then
+        printf '\033[1;36m # \033[0mpython3 removes the SteamPath value from the prefix user.reg\n'
+    else
+        python3 - "$PFX" <<'PYEOF' 2>/dev/null
+import re, sys
+p = sys.argv[1] + '/user.reg'
+try:
+    raw = open(p, 'rb').read()
+except Exception:
+    raise SystemExit(0)
+lines = raw.split(b'\n')
+out, insec, dropped = [], False, False
+for ln in lines:
+    if ln.startswith(b'['):
+        insec = (ln.strip() == b'[Software\\\\Valve\\\\Steam]')
+        out.append(ln)
+        continue
+    if insec and re.match(br'"SteamPath"="C:\\\\Program Files \(x86\)\\\\Steam"$', ln.strip()):
+        dropped = True
+        continue
+    out.append(ln)
+if dropped:
+    open(p, 'wb').write(b'\n'.join(out))
+    print("  removed SteamPath from user.reg")
+PYEOF
+        if grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null; then
+            warn "SteamPath still present - remove it manually: regedit, HKCU\\Software\\Valve\\Steam"
+        fi
+    fi
     # Restore the user's original SteamVR settings (backed up before our
     # first boot-time modification), and drop the crash-timestamp trigger.
     if [ -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" ]; then
-        mv -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" "$STEAM_ROOT/config/steamvr.vrsettings"
-        say "Restored your original steamvr.vrsettings"
+        run mv -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" "$STEAM_ROOT/config/steamvr.vrsettings"
+        [ -n "$DRY_RUN" ] || say "Restored your original steamvr.vrsettings"
     else
-        say "No steamvr.vrsettings backup found - left your settings as-is"
+        [ -n "$DRY_RUN" ] || say "No steamvr.vrsettings backup found - left your settings as-is"
     fi
-    rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
-    say "Restored files are next to the modified ones (*.bak-*). The vrpath seed"
-    say "and the SteamPath registry key were left alone; to strip them, delete"
-    say "the Standable entries (Linux path and S:\\ form) from"
-    say "~/.config/openvr/openvrpaths.vrpath and the"
-    say "SteamPath value from the prefix user.reg."
+    run rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
+    say "Uninstall complete - driver, server, hooks, seeds and registry value removed."
+    say "Restart SteamVR; it should no longer list or load a standable driver."
     exit 0
 fi
 
