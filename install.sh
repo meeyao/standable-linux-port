@@ -868,6 +868,40 @@ PY
     else
         warn "1 wineserver on this prefix + foreign ones:$FOREIGN (unrelated games, fine)"
     fi
+    # Proton helper processes (xalia.exe, steam.exe runner) don't match the
+    # sweep patterns (wine|proton|ignition_server), so an orphaned one can
+    # squat on this prefix across SteamVR restarts and wedge fresh sessions
+    # (observed: driver exit-1 loop until the stale xalia was killed) while
+    # every other check stays green. List them with age vs the vrserver boot:
+    # a helper older than the current vrserver cannot belong to this session.
+    _VRS=$(pgrep -x vrserver | head -1)
+    _VRS_START=0
+    [ -n "$_VRS" ] && _VRS_START=$(stat -c %Y "/proc/$_VRS" 2>/dev/null || echo 0)
+    _FOUND=""
+    for _hp in $(pgrep -f -i "xalia\.exe|steam\.exe" 2>/dev/null); do
+        [ -r "/proc/$_hp/environ" ] || continue
+        tr '\0' '\n' < "/proc/$_hp/environ" 2>/dev/null \
+            | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+            | grep -qx "STEAM_COMPAT_DATA_PATH=$COMPAT" || continue
+        _HSTART=$(stat -c %Y "/proc/$_hp" 2>/dev/null || echo 0)
+        _HPPID=$(ps -o ppid= -p "$_hp" 2>/dev/null | tr -d ' ')
+        _HCMD=$(tr '\0' ' ' < "/proc/$_hp/cmdline" 2>/dev/null | cut -c1-60)
+        _HFLAG="current session"
+        if [ -z "$_VRS_START" ] || [ "$_VRS_START" = 0 ]; then
+            _HFLAG="unknown (vrserver not running)"
+        elif [ "$_HSTART" -lt "$_VRS_START" ]; then
+            _HFLAG="STALE (predates vrserver boot)"
+        fi
+        _FOUND="$_FOUND
+        pid $_hp [$_HFLAG] ppid $_HPPID: $_HCMD"
+    done
+    if [ -z "$_FOUND" ]; then
+        ok "no orphaned Proton helpers on this prefix"
+    else
+        warn "Proton helper processes bound to this prefix (invisible to the sweeps):$_FOUND"
+        warn "kill only STALE-flagged ones (plain kill, never -9 or live session runners) and restart SteamVR if the driver exit-1 loops"
+    fi
+    unset _VRS _VRS_START _FOUND _hp _HSTART _HPPID _HCMD _HFLAG
     LOG="$STEAM_ROOT/logs/vrserver.txt"
     if [ -f "$LOG" ]; then
         F=$(tail -n 300 "$LOG" | grep -v "Failed to send message: SteamUser" | grep -v "SteamVR Shutting Down" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
