@@ -1154,7 +1154,10 @@ lines = raw.split(b'\n')
 out, insec, dropped = [], False, False
 for ln in lines:
     if ln.startswith(b'['):
-        insec = (ln.strip() == b'[Software\\\\Valve\\\\Steam]')
+        # Section headers carry a trailing timestamp
+        # ("[Software\\Valve\\Steam] 1789013391"); match the exact section
+        # only, never ActiveProcess/Apps subsections (Steam's own data).
+        insec = bool(re.match(br'\[Software\\\\Valve\\\\Steam\](\s+\d+)?$', ln.strip()))
         out.append(ln)
         continue
     if insec and re.match(br'"SteamPath"="C:\\\\Program Files \(x86\)\\\\Steam"$', ln.strip()):
