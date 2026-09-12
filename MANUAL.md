@@ -190,12 +190,25 @@ boot.
 ## 7. Register the driver with SteamVR
 
 SteamVR reads `~/.config/openvr/openvrpaths.vrpath`. Add the game folder to
-`external_drivers`, keeping anything already there:
+`external_drivers` twice: the Linux path (native driver load) and the
+current-Proton `S:\` form. Proton copies this file into the prefix on every
+launch and the game validates its driver path there with a raw Win32 check -
+a bare `/home/...` entry can never pass under Wine, so without the `S:\`
+entry you get the per-boot "driver path is missing" dialog (the driver
+itself still loads). Derive the `S:\` form from the game dir relative to
+`$S_TARGET` (step 6), keeping anything already there:
 
 ```sh
-python3 - "$GAME" <<'PY'
+python3 - "$GAME" "$S_TARGET" <<'PY'
 import json, os, sys
-game = sys.argv[1]
+game, s_target = sys.argv[1], sys.argv[2]
+try:
+    rel = os.path.relpath(game, s_target)
+except Exception:
+    rel = None
+expected = None
+if rel and not rel.startswith('..'):
+    expected = 'S:\\' + rel.replace('/', '\\')
 p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 try:
@@ -203,9 +216,11 @@ try:
 except Exception:
     d = {"runtime": [], "version": 1}
 ed = [e for e in (d.get('external_drivers') or [])
-      if not ('Standable' in e and ('\\' in e or game == e))]
+      if not ('Standable' in e and (e == game or ('\\' in e and e != expected)))]
 if game not in ed:
     ed.insert(0, game)
+if expected and expected not in ed:
+    ed.insert(1 if game in ed else 0, expected)
 d['external_drivers'] = ed
 json.dump(d, open(p, 'w'), indent=2)
 PY

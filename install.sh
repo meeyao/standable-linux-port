@@ -681,6 +681,38 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
+    # The S:\-form seed entry is what silences the game's per-boot "driver
+    # path is missing" dialog (Proton copies this file into the prefix each
+    # launch and the game checks it with a raw Win32 test). Cosmetic only -
+    # the driver loads regardless - so warn, don't fail.
+    if [ "$GAME_FOUND" = 1 ]; then
+        _STGT="$S_ROOT"
+        if [ -n "$PROTON" ] && [ -f "$PROTON" ] \
+           && ! grep -q 'get_validated_steamapps_parent' "$(dirname "$PROTON")/proton" 2>/dev/null; then
+            _STGT="$S_ROOT/steamapps"
+        fi
+        _SSTATE=$(python3 - "$GAME_DIR" "$_STGT" <<'PY' 2>/dev/null
+import json, os, sys
+game_dir, s_target = sys.argv[1], sys.argv[2]
+try:
+    rel = os.path.relpath(game_dir, s_target)
+except Exception:
+    rel = None
+expected = ('S:\\' + rel.replace('/', '\\')) if rel and not rel.startswith('..') else None
+try:
+    ed = json.load(open(os.path.expanduser('~/.config/openvr/openvrpaths.vrpath'))).get('external_drivers') or []
+except Exception:
+    ed = []
+print('ok' if expected and expected in ed else 'missing')
+PY
+)
+        if [ "$_SSTATE" = "ok" ]; then
+            ok "S:\\ driver-path seed present (game's per-boot path check passes)"
+        else
+            warn "S:\\ driver-path seed missing - expect the game's per-boot 'driver path is missing' dialog (cosmetic); re-run install"
+        fi
+        unset _STGT _SSTATE
+    fi
     # Launch hook lives in ~/.local/bin (XDG, hidden); older installs used
     # ~/bin - accept either so existing Steam launch options keep working.
     _hook=""
@@ -1006,7 +1038,8 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
     say "Restored files are next to the modified ones (*.bak-*). The vrpath seed"
     say "and the SteamPath registry key were left alone; to strip them, delete"
-    say "the Standable entry from ~/.config/openvr/openvrpaths.vrpath and the"
+    say "the Standable entries (Linux path and S:\\ form) from"
+    say "~/.config/openvr/openvrpaths.vrpath and the"
     say "SteamPath value from the prefix user.reg."
     exit 0
 fi
@@ -1094,14 +1127,29 @@ fi
 run ln -sfn "$S_TARGET" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
 
 # -- seed merge --------------------------------------------------------------
+# Two Standable entries: the Linux path (native driver load) plus the
+# current-Proton S:\ form. Proton copies this file into the prefix on every
+# launch, and the game validates its driver path there with a raw Win32
+# check - a bare /home/... entry can never pass under Wine, hence the
+# per-boot "driver path is missing" dialog without the S:\ entry (the driver
+# itself still loads, so the dialog means nothing). Stale-convention S:\
+# variants are dropped; the entry is re-derived here so a Proton switch
+# (re-install) re-seeds the right convention.
 say "Merging external_drivers into ~/.config/openvr/openvrpaths.vrpath…"
 if [ -n "$DRY_RUN" ]; then
-    printf '\033[1;36m # \033[0mpython3 adds "$GAME_DIR" to external_drivers in ~/.config/openvr/openvrpaths.vrpath (keeps existing entries)\n'
+    printf '\033[1;36m # \033[0mpython3 adds "$GAME_DIR" + the S:\\ game path to external_drivers in ~/.config/openvr/openvrpaths.vrpath (keeps existing entries)\n'
 else
-    python3 - "$HOME" "$GAME_DIR" <<'PYEOF'
+    python3 - "$HOME" "$GAME_DIR" "$S_TARGET" <<'PYEOF'
 import json, os, sys
-home, game_dir = sys.argv[1], sys.argv[2]
+home, game_dir, s_target = sys.argv[1], sys.argv[2], sys.argv[3]
 upath = game_dir
+try:
+    rel = os.path.relpath(game_dir, s_target)
+except Exception:
+    rel = None
+expected = None
+if rel and not rel.startswith('..'):
+    expected = 'S:\\' + rel.replace('/', '\\')
 seed_path = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(seed_path), exist_ok=True)
 try:
@@ -1109,8 +1157,10 @@ try:
 except Exception:
     data = {"runtime": [], "version": 1}
 ed = [e for e in (data.get('external_drivers') or [])
-      if not ('Standable' in e and ('\\' in e or upath == e))]
+      if not ('Standable' in e and (e == upath or ('\\' in e and e != expected)))]
 if upath not in ed: ed.insert(0, upath)
+if expected and expected not in ed:
+    ed.insert(1 if upath in ed else 0, expected)
 data['external_drivers'] = ed
 json.dump(data, open(seed_path, 'w'), indent=2)
 print("  entries:", ", ".join(e[:40] for e in ed))

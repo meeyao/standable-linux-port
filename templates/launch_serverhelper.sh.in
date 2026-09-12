@@ -40,6 +40,22 @@ case ":$PATH:" in
     *) PATH="$SCRIPT_DIR:$PATH"; export PATH ;;
 esac
 
+# Pin CWD to the driver's directory (ignition.json sits beside this script
+# and beside the server exe passed as $1).
+# ignition_server resolves its driver_dll ("../win64/driver_standable.dll")
+# against CWD, so inheriting vrserver's boot-dependent CWD makes driver load
+# a coin flip: CWD=bin/linux64 works, anything else fails the load and the
+# driver never appears (105s) until a lucky SteamVR restart. $0 can be a bare
+# relative path (shim spawn), so prefer the absolute server-exe path in $1
+# and fall back to $0's dir. Same pin also fixes the relative
+# `./wine_psvr2_hidraw.reg` import below.
+_sdir=""
+[ -n "$1" ] && _sdir="$(dirname "$1" 2>/dev/null)"
+[ -n "$_sdir" ] && [ -f "$_sdir/ignition.json" ] || _sdir="$SCRIPT_DIR"
+if [ -f "$_sdir/ignition.json" ]; then cd "$_sdir" 2>/dev/null || true; fi
+logh "cwd: $PWD ($0 | $1)"
+unset _sdir
+
 # Pick whatever Proton the game is actually running under right now, so a
 # switch in Steam's Compatibility UI takes effect on the next SteamVR boot
 # with no reinstall (and the driver can never mismatch the game and fight it
