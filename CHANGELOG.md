@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- The installer seeds the current-Proton `S:\` game path into Linux
+  `~/.config/openvr/openvrpaths.vrpath` next to the Linux path. Proton
+  copies that file into the prefix on every launch and the game validates
+  its driver path there with a raw Win32 check, which a bare `/home/...`
+  entry can never pass under Wine - hence the per-boot "driver path is
+  missing"   dialog (the driver itself always loaded fine). Verified by
+  diffing the Windows-side file before/after the game's own Fix It button,
+  which writes exactly the seeded form. `./standable check` verifies the
+  seed entry.
+- `launch_serverhelper.sh` pins CWD to the driver directory before starting
+  the server. `ignition_server` resolves its `driver_dll`
+  (`../win64/driver_standable.dll`) against CWD, so inheriting vrserver's
+  boot-dependent CWD made driver load a coin flip: it worked when vrserver
+  happened to boot with a compatible CWD and failed with silent exit 1
+  (vrserver 105s, no driver) otherwise. Proven with loader traces showing
+  the miss (`.../common/win64/...`) vs the hit (`.../bin/win64/...`).
+- The stale-wineserver sweep lived as three copies (hook, driver shim,
+  installer) and had already drifted once. Hook and shim now source one
+  shared `sweep.sh` (same pgrep-based scan, same fail-closed prefix guard);
+  the installer's wider install-time sweep stays separate by design.
+- `--uninstall` actually uninstalls now: it removes the driver shim, server,
+  bridge, launch scripts, shims, vrclient copies and `.bak` files (leaving
+  the game's own files alone), strips both vrpath seed entries, deletes the
+  `SteamPath` registry value with verification, and refuses while SteamVR
+  runs (deleting a loaded driver crashes it). Previously it left the driver
+  installed and working. Also dry-run safe (it wasn't - `rm`/`mv` executed).
+
 ## v1.0.0
 
 First major release. testing/rc is the maintained branch.

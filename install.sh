@@ -423,6 +423,10 @@ pick_proton() {
     [ -d "$PROTON" ] && [ -x "$PROTON/proton" ] && PROTON="$PROTON/proton"
 }
 
+# clear_stale_services - install-time sweep. Deliberately NOT the shared
+# sweep.sh: this one also reaps the game exe/wineboot/winedevice with user
+# messaging, while sweep.sh is the quiet boot-time foreign-only guard shared
+# by the hook and the driver shim.
 # clear_stale_services - when switching Proton builds the OLD build's wineserver
 # (and the game/driver it hosts) keeps running and blocks the new one: Steam's
 # "Play" appears to do nothing because the app is considered already running /
@@ -681,6 +685,38 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
+    # The S:\-form seed entry is what silences the game's per-boot "driver
+    # path is missing" dialog (Proton copies this file into the prefix each
+    # launch and the game checks it with a raw Win32 test). Cosmetic only -
+    # the driver loads regardless - so warn, don't fail.
+    if [ "$GAME_FOUND" = 1 ]; then
+        _STGT="$S_ROOT"
+        if [ -n "$PROTON" ] && [ -f "$PROTON" ] \
+           && ! grep -q 'get_validated_steamapps_parent' "$(dirname "$PROTON")/proton" 2>/dev/null; then
+            _STGT="$S_ROOT/steamapps"
+        fi
+        _SSTATE=$(python3 - "$GAME_DIR" "$_STGT" <<'PY' 2>/dev/null
+import json, os, sys
+game_dir, s_target = sys.argv[1], sys.argv[2]
+try:
+    rel = os.path.relpath(game_dir, s_target)
+except Exception:
+    rel = None
+expected = ('S:\\' + rel.replace('/', '\\')) if rel and not rel.startswith('..') else None
+try:
+    ed = json.load(open(os.path.expanduser('~/.config/openvr/openvrpaths.vrpath'))).get('external_drivers') or []
+except Exception:
+    ed = []
+print('ok' if expected and expected in ed else 'missing')
+PY
+)
+        if [ "$_SSTATE" = "ok" ]; then
+            ok "S:\\ driver-path seed present (game's per-boot path check passes)"
+        else
+            warn "S:\\ driver-path seed missing - expect the game's per-boot 'driver path is missing' dialog (cosmetic); re-run install"
+        fi
+        unset _STGT _SSTATE
+    fi
     # Launch hook lives in ~/.local/bin (XDG, hidden); older installs used
     # ~/bin - accept either so existing Steam launch options keep working.
     _hook=""
@@ -748,25 +784,32 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
         [ -f "$GAME_DIR/bin/linux64/proton_resolve.sh" ] \
             && ok "proton_resolve.sh deployed (runtime Proton switching)" \
             || bad "proton_resolve.sh missing - re-run install, Proton switches need reinstalls"
+        [ -f "$GAME_DIR/bin/linux64/sweep.sh" ] \
+            && ok "sweep.sh deployed (shared stale-wineserver sweep)" \
+            || bad "sweep.sh missing - re-run install, hook/driver fall back to no sweep"
         [ -f "$GAME_DIR/bin/linux64/win_vrpath.sh" ] \
             && ok "win_vrpath.sh deployed (Windows-side driver path repair)" \
             || bad "win_vrpath.sh missing - re-run install"
         _WINVR="$PFX/drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath"
+        # Proton restores the Linux-path entry on every launch, so its mere
+        # presence is permanent, not stale. What the game's check needs is a
+        # Wine-resolvable (S:\) entry alongside it - verified against the
+        # game's own Fix It button, which appends exactly that form.
         _WINSTATE=$(python3 - "$_WINVR" <<'PY' 2>/dev/null
 import json, sys
 try:
     ed = json.load(open(sys.argv[1])).get('external_drivers') or []
 except Exception:
     print('missing'); raise SystemExit(0)
-linux_junk = [e for e in ed if 'Standable' in e and e.startswith('/')]
 win_ok = [e for e in ed if 'Standable' in e and 'S:' in e.upper()]
-print('junk' if linux_junk else ('ok' if win_ok else 'missing'))
+linux_only = [e for e in ed if 'Standable' in e and e.startswith('/')]
+print('ok' if win_ok else ('linux-only' if linux_only else 'missing'))
 PY
 )
         if [ "$_WINSTATE" = "ok" ]; then
             ok "Windows-side driver path registered"
-        elif [ "$_WINSTATE" = "junk" ]; then
-            warn "Windows-side driver path has stale entries - repaired on next game/driver boot"
+        elif [ "$_WINSTATE" = "linux-only" ]; then
+            warn "Windows-side driver path has no Wine-resolvable entry - game will show its path dialog; repaired on next game/driver boot"
         else
             warn "Windows-side driver path not registered - repaired on next game/driver boot"
         fi
@@ -836,6 +879,65 @@ PY
     else
         warn "1 wineserver on this prefix + foreign ones:$FOREIGN (unrelated games, fine)"
     fi
+    # Proton helper processes (xalia.exe, steam.exe runner) don't match the
+    # sweep patterns (wine|proton|ignition_server), so an orphaned one can
+    # squat on this prefix across SteamVR restarts and wedge fresh sessions
+    # (observed: driver exit-1 loop until the stale xalia was killed) while
+    # every other check stays green. List them with age vs the vrserver boot:
+    # a helper older than the current vrserver cannot belong to this session.
+    _VRS=$(pgrep -x vrserver | head -1)
+    _VRS_START=0
+    [ -n "$_VRS" ] && _VRS_START=$(stat -c %Y "/proc/$_VRS" 2>/dev/null || echo 0)
+    _FOUND=""
+    for _hp in $(pgrep -f -i "xalia\.exe|steam\.exe" 2>/dev/null); do
+        [ -r "/proc/$_hp/environ" ] || continue
+        tr '\0' '\n' < "/proc/$_hp/environ" 2>/dev/null \
+            | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
+            | grep -qx "STEAM_COMPAT_DATA_PATH=$COMPAT" || continue
+        _HSTART=$(stat -c %Y "/proc/$_hp" 2>/dev/null || echo 0)
+        _HPPID=$(ps -o ppid= -p "$_hp" 2>/dev/null | tr -d ' ')
+        _HCMD=$(tr '\0' ' ' < "/proc/$_hp/cmdline" 2>/dev/null | cut -c1-60)
+        _HFLAG="current session"
+        if [ -z "$_VRS_START" ] || [ "$_VRS_START" = 0 ]; then
+            _HFLAG="unknown (vrserver not running)"
+        elif [ "$_HSTART" -lt "$_VRS_START" ]; then
+            _HFLAG="STALE (predates vrserver boot)"
+        fi
+        _FOUND="$_FOUND
+        pid $_hp [$_HFLAG] ppid $_HPPID: $_HCMD"
+    done
+    if [ -z "$_FOUND" ]; then
+        ok "no orphaned Proton helpers on this prefix"
+    else
+        warn "Proton helper processes bound to this prefix (invisible to the sweeps):$_FOUND"
+        warn "kill only STALE-flagged ones (plain kill, never -9 or live session runners) and restart SteamVR if the driver exit-1 loops"
+    fi
+    unset _VRS _VRS_START _FOUND _hp _HSTART _HPPID _HCMD _HFLAG
+    # Stale Ignition IPC segments: each boot uses fresh token-named segments,
+    # so any predating the vrserver boot are orphaned leftovers of unclean
+    # cycles. Inert by design (never reused), but worth knowing when the
+    # driver misbehaves. Check never deletes - remove manually with SteamVR
+    # stopped if a stuck episode calls for a fully clean board.
+    _VRS2=$(pgrep -x vrserver | head -1)
+    if [ -n "$_VRS2" ]; then
+        _VS2=$(stat -c %Y "/proc/$_VRS2" 2>/dev/null || echo 0)
+        _STALESHM=""
+        for _shm in /dev/shm/ignition_ipc_*_shm; do
+            [ -e "$_shm" ] || continue
+            _SMT=$(stat -c %Y "$_shm" 2>/dev/null || echo 0)
+            if [ "$_VS2" != 0 ] && [ "$_SMT" -lt "$_VS2" ]; then
+                _STALESHM="$_STALESHM $(basename "$_shm")"
+            fi
+        done
+        if [ -n "$_STALESHM" ]; then
+            warn "stale Ignition IPC segments (predate vrserver boot):$_STALESHM"
+        else
+            ok "no stale Ignition IPC segments"
+        fi
+        unset _STALESHM _shm _SMT
+        unset _VS2
+    fi
+    unset _VRS2
     LOG="$STEAM_ROOT/logs/vrserver.txt"
     if [ -f "$LOG" ]; then
         F=$(tail -n 300 "$LOG" | grep -v "Failed to send message: SteamUser" | grep -v "SteamVR Shutting Down" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
@@ -984,30 +1086,132 @@ if [ "${1:-}" = "--uninstall" ]; then
     detect_steam_root || die "Steam root not found"
     detect_game_dir || die "game not found"
     pick_prefix
+    WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
+    # Never pull a loaded driver out from under a running vrserver: deleting
+    # driver_standable.so mid-session crashes it. Refuse while it runs.
+    if pgrep -x vrserver >/dev/null 2>&1; then
+        if [ -n "$DRY_RUN" ]; then
+            warn "SteamVR is running - a real run would refuse until it quits"
+        elif [ -z "${ASSUME_YES:-}" ]; then
+            die "SteamVR is running - quit it first so the loaded driver can unload, then re-run"
+        else
+            warn "SteamVR is running - removing its loaded driver will crash it"
+        fi
+    fi
     say "Removing port artifacts…"
-    rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
-    rm -fv "$HOME/.local/share/icons/standable.png"
-    rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
-    rm -fv "$PFX/dosdevices/s:"
-    rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
-    rm -fv "$GAME_DIR/bin/linux64/steam_api64.dll"
-    rm -fv "$GAME_DIR/bin/win64/steam_api64.dll"
-    rm -fv "$GAME_DIR/bin/linux64/python3"
-    rm -fv "$GAME_DIR/bin/linux64/proton_resolve.sh"
-    rm -fv "$GAME_DIR/bin/linux64/win_vrpath.sh"
+    run rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+    run rm -fv "$HOME/.local/share/icons/standable.png"
+    run rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
+    run rm -fv "$PFX/dosdevices/s:"
+    run rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
+    # Prefix shims: we created this Steam tree (fresh prefixes have none), so
+    # restore any pre-existing file from our .bak, else remove the stub.
+    for _shim in vrpathreg.exe vrmonitor.exe; do
+        _f="$WIN64/$_shim"
+        _bak=$(ls -1t "$_f".bak-* 2>/dev/null | head -1)
+        if [ -n "$_bak" ]; then
+            run mv -f "$_bak" "$_f"
+            [ -n "$DRY_RUN" ] || say "restored $_f from backup"
+        else
+            run rm -fv "$_f"
+        fi
+    done
+    unset _shim _f _bak
+    # Deployed vrclient copies (Proton maintains this dir too - removing ours
+    # is harmless either way).
+    run rm -fv "$PFX/drive_c/vrclient/bin"/vrclient*.dll*
+    # Everything the installer added under bin/linux64, plus our .bak files.
+    # Untouched: the game's own files (Standable.exe, openvr_api.dll,
+    # vrclient_x64.dll, and bin/win64/driver_standable.dll).
+    run rm -fv "$GAME_DIR/bin/linux64/driver_standable.so" \
+        "$GAME_DIR/bin/linux64/ignition_server.exe" \
+        "$GAME_DIR/bin/linux64/ignition_bridge.dll" \
+        "$GAME_DIR/bin/linux64/launch_serverhelper.sh" \
+        "$GAME_DIR/bin/linux64/ignition.json" \
+        "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg" \
+        "$GAME_DIR/bin/linux64/steam_api64.dll" \
+        "$GAME_DIR/bin/win64/steam_api64.dll" \
+        "$GAME_DIR/bin/linux64/python3" \
+        "$GAME_DIR/bin/linux64/proton_resolve.sh" \
+        "$GAME_DIR/bin/linux64/sweep.sh" \
+        "$GAME_DIR/bin/linux64/win_vrpath.sh"
+    run rm -f "$GAME_DIR/bin/linux64"/driver_standable.so.bak-* \
+        "$GAME_DIR/bin/linux64"/ignition_server.exe.bak-* \
+        "$GAME_DIR/bin/linux64"/ignition_bridge.dll.bak-* \
+        "$GAME_DIR/bin/linux64"/launch_serverhelper.sh.bak-* \
+        "$GAME_DIR/bin/linux64"/ignition.json.bak-* \
+        "$GAME_DIR/bin/linux64"/wine_psvr2_hidraw.reg.bak-* \
+        "$GAME_DIR/bin/linux64"/steam_api64.dll.bak-* \
+        "$GAME_DIR/bin/win64"/steam_api64.dll.bak-* \
+        "$GAME_DIR/bin/linux64"/python3.bak-* \
+        "$GAME_DIR/bin/linux64"/proton_resolve.sh.bak-* \
+        "$GAME_DIR/bin/linux64"/sweep.sh.bak-* \
+        "$GAME_DIR/bin/linux64"/win_vrpath.sh.bak-*
+    # vrpath seed: strip our entries (Linux path and S:\ form), keep the rest.
+    if [ -n "$DRY_RUN" ]; then
+        printf '\033[1;36m # \033[0mpython3 removes Standable entries from ~/.config/openvr/openvrpaths.vrpath\n'
+    else
+        python3 - <<'PYEOF' 2>/dev/null
+import json, os
+p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
+try:
+    data = json.load(open(p))
+except Exception:
+    raise SystemExit(0)
+ed = data.get('external_drivers') or []
+new_ed = [e for e in ed if 'Standable' not in e]
+if len(new_ed) != len(ed):
+    data['external_drivers'] = new_ed
+    json.dump(data, open(p, 'w'), indent=2)
+    print("  removed %d Standable seed entr%s" % (len(ed) - len(new_ed), 'y' if len(ed) - len(new_ed) == 1 else 'ies'))
+PYEOF
+    fi
+    # SteamPath registry value: drop it by editing user.reg directly (no
+    # Proton boot needed). Only touches the exact value the installer sets;
+    # verifies afterwards and falls back to manual instructions.
+    if [ -n "$DRY_RUN" ]; then
+        printf '\033[1;36m # \033[0mpython3 removes the SteamPath value from the prefix user.reg\n'
+    else
+        python3 - "$PFX" <<'PYEOF' 2>/dev/null
+import re, sys
+p = sys.argv[1] + '/user.reg'
+try:
+    raw = open(p, 'rb').read()
+except Exception:
+    raise SystemExit(0)
+lines = raw.split(b'\n')
+out, insec, dropped = [], False, False
+for ln in lines:
+    if ln.startswith(b'['):
+        # Section headers carry a trailing timestamp
+        # ("[Software\\Valve\\Steam] 1789013391"); match the exact section
+        # only, never ActiveProcess/Apps subsections (Steam's own data).
+        insec = bool(re.match(br'\[Software\\\\Valve\\\\Steam\](\s+\d+)?$', ln.strip()))
+        out.append(ln)
+        continue
+    if insec and re.match(br'"SteamPath"="C:\\\\Program Files \(x86\)\\\\Steam"$', ln.strip()):
+        dropped = True
+        continue
+    out.append(ln)
+if dropped:
+    open(p, 'wb').write(b'\n'.join(out))
+    print("  removed SteamPath from user.reg")
+PYEOF
+        if grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null; then
+            warn "SteamPath still present - remove it manually: regedit, HKCU\\Software\\Valve\\Steam"
+        fi
+    fi
     # Restore the user's original SteamVR settings (backed up before our
     # first boot-time modification), and drop the crash-timestamp trigger.
     if [ -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" ]; then
-        mv -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" "$STEAM_ROOT/config/steamvr.vrsettings"
-        say "Restored your original steamvr.vrsettings"
+        run mv -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" "$STEAM_ROOT/config/steamvr.vrsettings"
+        [ -n "$DRY_RUN" ] || say "Restored your original steamvr.vrsettings"
     else
-        say "No steamvr.vrsettings backup found - left your settings as-is"
+        [ -n "$DRY_RUN" ] || say "No steamvr.vrsettings backup found - left your settings as-is"
     fi
-    rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
-    say "Restored files are next to the modified ones (*.bak-*). The vrpath seed"
-    say "and the SteamPath registry key were left alone; to strip them, delete"
-    say "the Standable entry from ~/.config/openvr/openvrpaths.vrpath and the"
-    say "SteamPath value from the prefix user.reg."
+    run rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
+    say "Uninstall complete - driver, server, hooks, seeds and registry value removed."
+    say "Restart SteamVR; it should no longer list or load a standable driver."
     exit 0
 fi
 
@@ -1094,14 +1298,29 @@ fi
 run ln -sfn "$S_TARGET" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
 
 # -- seed merge --------------------------------------------------------------
+# Two Standable entries: the Linux path (native driver load) plus the
+# current-Proton S:\ form. Proton copies this file into the prefix on every
+# launch, and the game validates its driver path there with a raw Win32
+# check - a bare /home/... entry can never pass under Wine, hence the
+# per-boot "driver path is missing" dialog without the S:\ entry (the driver
+# itself still loads, so the dialog means nothing). Stale-convention S:\
+# variants are dropped; the entry is re-derived here so a Proton switch
+# (re-install) re-seeds the right convention.
 say "Merging external_drivers into ~/.config/openvr/openvrpaths.vrpath…"
 if [ -n "$DRY_RUN" ]; then
-    printf '\033[1;36m # \033[0mpython3 adds "$GAME_DIR" to external_drivers in ~/.config/openvr/openvrpaths.vrpath (keeps existing entries)\n'
+    printf '\033[1;36m # \033[0mpython3 adds "$GAME_DIR" + the S:\\ game path to external_drivers in ~/.config/openvr/openvrpaths.vrpath (keeps existing entries)\n'
 else
-    python3 - "$HOME" "$GAME_DIR" <<'PYEOF'
+    python3 - "$HOME" "$GAME_DIR" "$S_TARGET" <<'PYEOF'
 import json, os, sys
-home, game_dir = sys.argv[1], sys.argv[2]
+home, game_dir, s_target = sys.argv[1], sys.argv[2], sys.argv[3]
 upath = game_dir
+try:
+    rel = os.path.relpath(game_dir, s_target)
+except Exception:
+    rel = None
+expected = None
+if rel and not rel.startswith('..'):
+    expected = 'S:\\' + rel.replace('/', '\\')
 seed_path = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(seed_path), exist_ok=True)
 try:
@@ -1109,8 +1328,10 @@ try:
 except Exception:
     data = {"runtime": [], "version": 1}
 ed = [e for e in (data.get('external_drivers') or [])
-      if not ('Standable' in e and ('\\' in e or upath == e))]
+      if not ('Standable' in e and (e == upath or ('\\' in e and e != expected)))]
 if upath not in ed: ed.insert(0, upath)
+if expected and expected not in ed:
+    ed.insert(1 if upath in ed else 0, expected)
 data['external_drivers'] = ed
 json.dump(data, open(seed_path, 'w'), indent=2)
 print("  entries:", ", ".join(e[:40] for e in ed))
@@ -1208,6 +1429,9 @@ gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 run chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
 # shared Proton resolver (sourced by launch_serverhelper.sh + launch hook)
 gen proton_resolve.sh.in "$GAME_DIR/bin/linux64/proton_resolve.sh"
+# shared stale-wineserver sweep (sourced by launch_serverhelper.sh + launch
+# hook instead of a copy in each - the copies already drifted once)
+gen sweep.sh.in "$GAME_DIR/bin/linux64/sweep.sh"
 # Windows-side driver registration repair (run by both launch scripts)
 run cp "$REPO/templates/win_vrpath.sh.in" "$GAME_DIR/bin/linux64/win_vrpath.sh"
 run chmod +x "$GAME_DIR/bin/linux64/win_vrpath.sh"

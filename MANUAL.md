@@ -39,16 +39,23 @@ an extra patch.
 
 ### The patch
 
-`build/patches/ignition-rpc-timeout.patch` adds timeouts to Ignition's RPC
-calls. Without it, a call that never gets an answer (e.g. the game isn't
-running) blocks forever, and SteamVR's watchdog aborts the driver into Safe
-Mode after ~20 s. The patch touches 3 files:
+`build/patches/ignition-rpc-timeout.patch` parametrizes Ignition's RPC
+calls with timeouts. Without it, a call that never gets an answer (e.g. the
+game isn't running) blocks forever, and SteamVR's watchdog aborts the driver
+into Safe Mode after ~20 s. The patch touches 3 files:
 
-- `rpc_core.cpp` / `rpc_core.h` - adds a timeout to the internal RPC call,
-  default 60 s
+- `rpc_core.cpp` / `rpc_core.h` - adds an opt-in `CallMethodTimeout`
+  wrapper around the internal RPC call (which already waited 60 s by
+  default)
 - `rpc_server_tracked_device_provider.cpp` - uses short timeouts for the
-  driver's `Cleanup`/`RunFrame` so a stalled game DLL can't wedge SteamVR's
-  shutdown watchdog
+  driver's `Cleanup` (4 s) / `RunFrame` (3 s) so a stalled game DLL can't
+  wedge SteamVR's shutdown watchdog (caught and skipped)
+
+Upstream later added the same shape independently (`CallWithTimeout` plus a
+5 s time-sync, post-`6bb3c8a`), but only applied it to time-sync - the
+`Cleanup`/`RunFrame` guards here are still the only thing covering the
+watchdogs. If upstream is ever adopted, keep those two call sites (renamed
+to their API) and drop the rest.
 
 To reproduce it:
 
@@ -143,7 +150,12 @@ mkdir -p "$GAME/bin/linux64"
 cp vendor/libdriver_ignition.so "$GAME/bin/linux64/driver_standable.so"
 cp vendor/ignition_server.exe "$GAME/bin/linux64/"
 cp vendor/ignition_bridge.dll "$GAME/bin/linux64/"
+cp config/wine_psvr2_hidraw.reg "$GAME/bin/linux64/"
 ```
+
+`wine_psvr2_hidraw.reg` is imported at every driver boot for PSVR2 Sense
+controller support (the launch script runs `reg import` on it, so it must
+sit beside the scripts).
 
 ## 4. steam_api64.dll (Steamworks runtime)
 
@@ -185,17 +197,34 @@ ln -sfn "$S_TARGET" "$PFX/dosdevices/s:"
 ```
 
 Get this wrong and you get the "steamVR driver path not found" dialog on every
-boot.
+boot. Note the dialog can also persist with a correct link: Proton rewrites
+the Windows-side `openvrpaths.vrpath` from the Linux copy on every launch,
+wiping Wine-side repairs, and the game checks it with a raw Win32 test a
+bare `/home/...` entry can never pass. Step 7's `S:\` seed entry is what
+satisfies that check.
 
 ## 7. Register the driver with SteamVR
 
 SteamVR reads `~/.config/openvr/openvrpaths.vrpath`. Add the game folder to
-`external_drivers`, keeping anything already there:
+`external_drivers` twice: the Linux path (native driver load) and the
+current-Proton `S:\` form. Proton copies this file into the prefix on every
+launch and the game validates its driver path there with a raw Win32 check -
+a bare `/home/...` entry can never pass under Wine, so without the `S:\`
+entry you get the per-boot "driver path is missing" dialog (the driver
+itself still loads). Derive the `S:\` form from the game dir relative to
+`$S_TARGET` (step 6), keeping anything already there:
 
 ```sh
-python3 - "$GAME" <<'PY'
+python3 - "$GAME" "$S_TARGET" <<'PY'
 import json, os, sys
-game = sys.argv[1]
+game, s_target = sys.argv[1], sys.argv[2]
+try:
+    rel = os.path.relpath(game, s_target)
+except Exception:
+    rel = None
+expected = None
+if rel and not rel.startswith('..'):
+    expected = 'S:\\' + rel.replace('/', '\\')
 p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(p), exist_ok=True)
 try:
@@ -203,9 +232,11 @@ try:
 except Exception:
     d = {"runtime": [], "version": 1}
 ed = [e for e in (d.get('external_drivers') or [])
-      if not ('Standable' in e and ('\\' in e or game == e))]
+      if not ('Standable' in e and (e == game or ('\\' in e and e != expected)))]
 if game not in ed:
     ed.insert(0, game)
+if expected and expected not in ed:
+    ed.insert(1 if game in ed else 0, expected)
 d['external_drivers'] = ed
 json.dump(d, open(p, 'w'), indent=2)
 PY
@@ -242,9 +273,14 @@ Two scripts keep the setup healthy at boot. Both are templates with
 `@PLACEHOLDERS@`; substitute your paths, then install them.
 
 `launch_serverhelper.sh` - the driver calls this to start `ignition_server.exe`
-under Proton. It repairs the `s:` link, the VRChat link, SteamVR's safe-mode
-flags, and kills stale foreign-Proton wineservers each boot. Goes in
-`$GAME/bin/linux64/`.
+under Proton. It pins CWD to the driver dir (the server resolves its driver
+DLL against it), repairs the `s:` link, the VRChat link, SteamVR's safe-mode
+flags, kills stale foreign-Proton wineservers each boot, and supervises the
+server (respawn up to 20 times so one is alive for SteamVR's probes). Goes
+in `$GAME/bin/linux64/`. Shared bits live in sibling files sourced at boot:
+`proton_resolve.sh` (runtime Proton switching), `sweep.sh` (the wineserver
+sweep), `win_vrpath.sh` (Windows-side driver path repair), `python3` (the
+interpreter shim for the Sniper sandbox), `ignition.json` (server config).
 
 `standable_launch_hook.sh` - set as the game's Steam Launch Options. Runs the
 game in host context so the desktop settings window shows while SteamVR runs.
@@ -263,6 +299,7 @@ vars=(-e "s|@GAME_DIR@|$GAME|g"
 
 sed "${vars[@]}" templates/launch_serverhelper.sh.in > "$GAME/bin/linux64/launch_serverhelper.sh"
 sed "${vars[@]}" templates/proton_resolve.sh.in > "$GAME/bin/linux64/proton_resolve.sh"
+sed "${vars[@]}" templates/sweep.sh.in > "$GAME/bin/linux64/sweep.sh"
 sed "${vars[@]}" templates/win_vrpath.sh.in > "$GAME/bin/linux64/win_vrpath.sh"
 sed "${vars[@]}" templates/proton_python.sh.in > "$GAME/bin/linux64/python3"
 sed "${vars[@]}" templates/ignition.json.in > "$GAME/bin/linux64/ignition.json"
@@ -304,24 +341,44 @@ Delete what you added, in reverse:
 rm -f "$GAME/bin/linux64/driver_standable.so" \
       "$GAME/bin/linux64/ignition_server.exe" \
       "$GAME/bin/linux64/ignition_bridge.dll" \
+      "$GAME/bin/linux64/launch_serverhelper.sh" \
+      "$GAME/bin/linux64/ignition.json" \
+      "$GAME/bin/linux64/wine_psvr2_hidraw.reg" \
       "$GAME/bin/linux64/steam_api64.dll" \
       "$GAME/bin/win64/steam_api64.dll" \
       "$GAME/bin/linux64/python3" \
       "$GAME/bin/linux64/proton_resolve.sh" \
+      "$GAME/bin/linux64/sweep.sh" \
       "$GAME/bin/linux64/win_vrpath.sh" \
       "$HOME/.local/bin/standable_launch_hook.sh" \
       "$PFX/drive_c/vr_bootstrap.exe" \
       "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe" \
-      "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe"
+      "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe" \
+      "$PFX/drive_c/vrclient/bin/vrclient.dll" \
+      "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
 rm -f "$PFX/dosdevices/s:"
 rm -f "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
 ```
 
-Remove the game entry from `external_drivers` in
-`~/.config/openvr/openvrpaths.vrpath` and delete the `SteamPath` value from
-`HKCU\Software\Valve\Steam` if you added it (step 5). Your original
-`steamvr.vrsettings` is kept at `steamvr.vrsettings.standable.bak` if the
-scripts modified it - restore it with `mv` to undo.
+Remove every Standable entry (Linux path and `S:\` form) from
+`external_drivers` in `~/.config/openvr/openvrpaths.vrpath`:
+
+```sh
+python3 - <<'PY'
+import json, os
+p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
+d = json.load(open(p))
+d['external_drivers'] = [e for e in d.get('external_drivers') or []
+                         if 'Standable' not in e]
+json.dump(d, open(p, 'w'), indent=2)
+PY
+```
+
+Delete the `SteamPath` value from `HKCU\Software\Valve\Steam` if you added
+it (step 5). Quit SteamVR first - deleting `driver_standable.so` out from
+under a running vrserver crashes it. Your original `steamvr.vrsettings` is
+kept at `steamvr.vrsettings.standable.bak` if the scripts modified it -
+restore it with `mv` to undo.
 
 ## Why these files exist
 
