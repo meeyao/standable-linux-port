@@ -791,21 +791,25 @@ PY
             && ok "win_vrpath.sh deployed (Windows-side driver path repair)" \
             || bad "win_vrpath.sh missing - re-run install"
         _WINVR="$PFX/drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath"
+        # Proton restores the Linux-path entry on every launch, so its mere
+        # presence is permanent, not stale. What the game's check needs is a
+        # Wine-resolvable (S:\) entry alongside it - verified against the
+        # game's own Fix It button, which appends exactly that form.
         _WINSTATE=$(python3 - "$_WINVR" <<'PY' 2>/dev/null
 import json, sys
 try:
     ed = json.load(open(sys.argv[1])).get('external_drivers') or []
 except Exception:
     print('missing'); raise SystemExit(0)
-linux_junk = [e for e in ed if 'Standable' in e and e.startswith('/')]
 win_ok = [e for e in ed if 'Standable' in e and 'S:' in e.upper()]
-print('junk' if linux_junk else ('ok' if win_ok else 'missing'))
+linux_only = [e for e in ed if 'Standable' in e and e.startswith('/')]
+print('ok' if win_ok else ('linux-only' if linux_only else 'missing'))
 PY
 )
         if [ "$_WINSTATE" = "ok" ]; then
             ok "Windows-side driver path registered"
-        elif [ "$_WINSTATE" = "junk" ]; then
-            warn "Windows-side driver path has stale entries - repaired on next game/driver boot"
+        elif [ "$_WINSTATE" = "linux-only" ]; then
+            warn "Windows-side driver path has no Wine-resolvable entry - game will show its path dialog; repaired on next game/driver boot"
         else
             warn "Windows-side driver path not registered - repaired on next game/driver boot"
         fi
