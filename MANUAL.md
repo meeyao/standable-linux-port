@@ -39,16 +39,23 @@ an extra patch.
 
 ### The patch
 
-`build/patches/ignition-rpc-timeout.patch` adds timeouts to Ignition's RPC
-calls. Without it, a call that never gets an answer (e.g. the game isn't
-running) blocks forever, and SteamVR's watchdog aborts the driver into Safe
-Mode after ~20 s. The patch touches 3 files:
+`build/patches/ignition-rpc-timeout.patch` parametrizes Ignition's RPC
+calls with timeouts. Without it, a call that never gets an answer (e.g. the
+game isn't running) blocks forever, and SteamVR's watchdog aborts the driver
+into Safe Mode after ~20 s. The patch touches 3 files:
 
-- `rpc_core.cpp` / `rpc_core.h` - adds a timeout to the internal RPC call,
-  default 60 s
+- `rpc_core.cpp` / `rpc_core.h` - adds an opt-in `CallMethodTimeout`
+  wrapper around the internal RPC call (which already waited 60 s by
+  default)
 - `rpc_server_tracked_device_provider.cpp` - uses short timeouts for the
-  driver's `Cleanup`/`RunFrame` so a stalled game DLL can't wedge SteamVR's
-  shutdown watchdog
+  driver's `Cleanup` (4 s) / `RunFrame` (3 s) so a stalled game DLL can't
+  wedge SteamVR's shutdown watchdog (caught and skipped)
+
+Upstream later added the same shape independently (`CallWithTimeout` plus a
+5 s time-sync, post-`6bb3c8a`), but only applied it to time-sync - the
+`Cleanup`/`RunFrame` guards here are still the only thing covering the
+watchdogs. If upstream is ever adopted, keep those two call sites (renamed
+to their API) and drop the rest.
 
 To reproduce it:
 
@@ -143,7 +150,12 @@ mkdir -p "$GAME/bin/linux64"
 cp vendor/libdriver_ignition.so "$GAME/bin/linux64/driver_standable.so"
 cp vendor/ignition_server.exe "$GAME/bin/linux64/"
 cp vendor/ignition_bridge.dll "$GAME/bin/linux64/"
+cp config/wine_psvr2_hidraw.reg "$GAME/bin/linux64/"
 ```
+
+`wine_psvr2_hidraw.reg` is imported at every driver boot for PSVR2 Sense
+controller support (the launch script runs `reg import` on it, so it must
+sit beside the scripts).
 
 ## 4. steam_api64.dll (Steamworks runtime)
 
@@ -185,7 +197,11 @@ ln -sfn "$S_TARGET" "$PFX/dosdevices/s:"
 ```
 
 Get this wrong and you get the "steamVR driver path not found" dialog on every
-boot.
+boot. Note the dialog can also persist with a correct link: Proton rewrites
+the Windows-side `openvrpaths.vrpath` from the Linux copy on every launch,
+wiping Wine-side repairs, and the game checks it with a raw Win32 test a
+bare `/home/...` entry can never pass. Step 7's `S:\` seed entry is what
+satisfies that check.
 
 ## 7. Register the driver with SteamVR
 
@@ -257,9 +273,14 @@ Two scripts keep the setup healthy at boot. Both are templates with
 `@PLACEHOLDERS@`; substitute your paths, then install them.
 
 `launch_serverhelper.sh` - the driver calls this to start `ignition_server.exe`
-under Proton. It repairs the `s:` link, the VRChat link, SteamVR's safe-mode
-flags, and kills stale foreign-Proton wineservers each boot. Goes in
-`$GAME/bin/linux64/`.
+under Proton. It pins CWD to the driver dir (the server resolves its driver
+DLL against it), repairs the `s:` link, the VRChat link, SteamVR's safe-mode
+flags, kills stale foreign-Proton wineservers each boot, and supervises the
+server (respawn up to 20 times so one is alive for SteamVR's probes). Goes
+in `$GAME/bin/linux64/`. Shared bits live in sibling files sourced at boot:
+`proton_resolve.sh` (runtime Proton switching), `sweep.sh` (the wineserver
+sweep), `win_vrpath.sh` (Windows-side driver path repair), `python3` (the
+interpreter shim for the Sniper sandbox), `ignition.json` (server config).
 
 `standable_launch_hook.sh` - set as the game's Steam Launch Options. Runs the
 game in host context so the desktop settings window shows while SteamVR runs.

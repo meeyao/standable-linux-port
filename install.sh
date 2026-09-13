@@ -909,6 +909,31 @@ PY
         warn "kill only STALE-flagged ones (plain kill, never -9 or live session runners) and restart SteamVR if the driver exit-1 loops"
     fi
     unset _VRS _VRS_START _FOUND _hp _HSTART _HPPID _HCMD _HFLAG
+    # Stale Ignition IPC segments: each boot uses fresh token-named segments,
+    # so any predating the vrserver boot are orphaned leftovers of unclean
+    # cycles. Inert by design (never reused), but worth knowing when the
+    # driver misbehaves. Check never deletes - remove manually with SteamVR
+    # stopped if a stuck episode calls for a fully clean board.
+    _VRS2=$(pgrep -x vrserver | head -1)
+    if [ -n "$_VRS2" ]; then
+        _VS2=$(stat -c %Y "/proc/$_VRS2" 2>/dev/null || echo 0)
+        _STALESHM=""
+        for _shm in /dev/shm/ignition_ipc_*_shm; do
+            [ -e "$_shm" ] || continue
+            _SMT=$(stat -c %Y "$_shm" 2>/dev/null || echo 0)
+            if [ "$_VS2" != 0 ] && [ "$_SMT" -lt "$_VS2" ]; then
+                _STALESHM="$_STALESHM $(basename "$_shm")"
+            fi
+        done
+        if [ -n "$_STALESHM" ]; then
+            warn "stale Ignition IPC segments (predate vrserver boot):$_STALESHM"
+        else
+            ok "no stale Ignition IPC segments"
+        fi
+        unset _STALESHM _shm _SMT
+        unset _VS2
+    fi
+    unset _VRS2
     LOG="$STEAM_ROOT/logs/vrserver.txt"
     if [ -f "$LOG" ]; then
         F=$(tail -n 300 "$LOG" | grep -v "Failed to send message: SteamUser" | grep -v "SteamVR Shutting Down" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
