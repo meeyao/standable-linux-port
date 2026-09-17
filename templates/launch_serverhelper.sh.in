@@ -23,6 +23,16 @@ export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 PROTON="@PROTON@"
 logh "=== launch args: $*"
 
+# Single-instance lock up front, before any side effects. A failed flock means
+# another helper is alive, so stand down. This has to come before the
+# foreign-wineserver sweep: a duplicate helper used to kill the active one's
+# wineserver and cause a spurious 105.
+exec 9>>"${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.lock"
+if ! flock -n 9; then
+    logh "another helper holds the lock, standing down"
+    exit 0
+fi
+
 # Proton's launcher is `#!/usr/bin/env python3` but modern Proton builds need
 # Python >= 3.11 (`from typing import Self`); SteamVR runs this driver under
 # the Sniper sandbox, which only ships Python 3.9, so Proton would die on
@@ -81,6 +91,11 @@ S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # derives paths from its CWD mapping at runtime, so consistency is all that
 # matters.
 PROTON_DIR="$(dirname "$PROTON")"
+# Proton's launcher + start.exe cost ~3 s of the cold boot, which is most of
+# the driver's probe window. Use the wine binary directly; fall back to
+# runinprefix on odd builds.
+PROTON_WINE="$PROTON_DIR/files/bin/wine"
+export WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx"
 if grep -q 'get_validated_steamapps_parent' "$PROTON_DIR/proton" 2>/dev/null; then
     S_TARGET="@S_ROOT@"
 else
@@ -155,7 +170,9 @@ fix_vrchat() {
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers
 logh "wineservers after sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
-"$PROTON" run reg import ./wine_psvr2_hidraw.reg >/dev/null 2>&1 &
+# Defer the PSVR2 reg import: it's a second cold Proton boot and racing the
+# server boot costs the handshake. 20 s is well inside the session.
+( sleep 20; "$PROTON" run reg import ./wine_psvr2_hidraw.reg ) >/dev/null 2>&1 &
 
 fix_s
 fix_vrchat
@@ -166,6 +183,7 @@ if [ -x "$SCRIPT_DIR/win_vrpath.sh" ]; then
     "$SCRIPT_DIR/win_vrpath.sh" "$STEAM_COMPAT_DATA_PATH/pfx" "$(cd "$SCRIPT_DIR/../.." && pwd)" "$S_TARGET"
 fi
 ( for i in $(seq 20); do sleep 3; [ -e "$S_LINK/" ] || fix_s; fix_vrchat; done ) &
+_repair_pid=$!
 
 # Proton dies with exit 1 and no output we can see, so capture its own log
 # (PROTON_LOG) into the standable state dir. That's the file that tells us
@@ -198,22 +216,39 @@ _server_running() {
     return 1
 }
 
-exec 9>>"${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.lock"
-if ! flock -n 9; then
-    # Another helper supervises here; only fall in if no server is running
-    # (its supervisor is between spawn attempts and the lock holder may be
-    # gone). Never pile up a second server.
-    if ! _server_running; then
-        "$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
-        logh "server exit: $? (standalone, another helper supervising)"
-    fi
-    exit 0
-fi
+# Driver's current secret, for the game-launch hook (it reuses it to build the
+# same shm names). Written every spawn.
+[ -n "${2:-}" ] && printf '%s' "$2" > "${XDG_STATE_HOME:-$HOME/.local/state}/standable/current_secret" 2>/dev/null
+
 # Parent is the vrserver process that loaded the driver shim; when it exits
 # (SteamVR quits) the helper must stop respawning.
 _seppid="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"
+_repair_pid="${_repair_pid:-}"
+
+# Server runs stay in the foreground so Proton keeps normal signal behavior;
+# parent death is handled by the loop-top check and the EXIT trap.
+
+# Kill the 60 s s:-repair loop on exit. Don't touch /dev/shm/ignition_ipc_*:
+# those are the driver's, and wiping them broke the handshake.
+cleanup_helper() {
+    [ -n "$_repair_pid" ] && kill "$_repair_pid" 2>/dev/null
+}
+trap cleanup_helper EXIT
+
+# The driver's shm should exist by now, but wait briefly just in case. Logged
+# so the timing is visible.
+SHM_C2S="/dev/shm/ignition_ipc_${2:-none}_c2s_shm"
+for _w in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$SHM_C2S" ] && break
+    sleep 0.2
+done
+logh "shm wait: $SHM_C2S exists=$([ -e "$SHM_C2S" ] && echo yes || echo no)"
+
 _server_code=0
-for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+for _attempt in $(seq 1 40); do
+    # SteamVR may have closed while we slept: never boot into a dead
+    # session, just break (trap handles the remains).
+    [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
     # Single-instance guard: never run two servers in this prefix. If one
     # exists (another helper's spawn), wait it out instead of stacking.
     if _server_running; then
@@ -222,14 +257,19 @@ for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         sleep 3
         continue
     fi
-    "$PROTON" run "$@" >> "$SERVER_LOG" 2>&1
-    _server_code=$?
-    logh "server exit: $_server_code (attempt $_attempt)"
+    # Direct wine, or runinprefix on odd builds.
+    if [ -x "$PROTON_WINE" ]; then
+        "$PROTON_WINE" "$@" >> "$SERVER_LOG" 2>&1
+        _server_code=$?
+        logh "server exit: $_server_code (attempt $_attempt, wine)"
+    else
+        "$PROTON" runinprefix "$@" >> "$SERVER_LOG" 2>&1
+        _server_code=$?
+        logh "server exit: $_server_code (attempt $_attempt, runinprefix)"
+    fi
     [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
-    # No long sleep: the wineserver dies ~3 s after its last client exits, and
-    # respawning into a dead prefix costs a full ~5 s Proton cold boot - more
-    # than SteamVR's probe gap. A fast respawn reuses the still-alive
-    # wineserver and reaches its handshake in ~2 s.
+    # Keep a server up through the driver's retry window. Short gap, many
+    # attempts; cheap when the shm is gone (server exits immediately).
     sleep 1
 done
 exit "$_server_code"
