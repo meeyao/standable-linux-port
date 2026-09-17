@@ -62,6 +62,9 @@ run_env() { # run_env <env_kv...> -- <cmd...> (env prefix applied/printed)
 
 IGNITION_URL="${IGNITION_URL:-https://github.com/BnuuySolutions/Ignition.git}"
 IGNITION_SRC="${IGNITION_SRC:-$HOME/.cache/standable-ignition}"
+# Upstream commit the vendored binaries and build/patches are against.
+# --build-from-source pins here so the result matches vendor/SHA256SUMS.
+IGNITION_COMMIT="${IGNITION_COMMIT:-6bb3c8a}"
 XWIN_VERSION="${XWIN_VERSION:-0.10.0}"
 XWIN_URL="${XWIN_URL:-https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz}"
 
@@ -157,8 +160,8 @@ ensure_build_toolchain() {
 # SDK via xwin (~/.xwin-cache). Only used with --build-from-source; otherwise the
 # prebuilt vendor/ copies are used. Outputs:
 #   $IGNITION_SRC/build/Ignition-Linux-Windows/{libdriver_ignition.so,ignition_server.exe,ignition_bridge.dll}
-# Skips work (and the slow build) when the cached source is already up to date
-# with upstream and the artifacts exist.
+# Skips the build when the cached source is already at $IGNITION_COMMIT and
+# the artifacts exist.
 build_ignition() {
     local out="$IGNITION_SRC/build/Ignition-Linux-Windows"
     local have=0
@@ -166,41 +169,38 @@ build_ignition() {
 
     if [ ! -d "$IGNITION_SRC/.git" ]; then
         say "Cloning Ignition source…"
-        git clone --depth 1 "$IGNITION_URL" "$IGNITION_SRC"
+        git clone "$IGNITION_URL" "$IGNITION_SRC"
     fi
 
-    # Decide whether we need (re)building: skip only if artifacts exist AND the
-    # cached source is current with upstream. Fetching is cheap; the build isn't.
+    # Rebuild if artifacts are missing or the cached source isn't at the
+    # pinned commit.
     local dirty=0
-    ( cd "$IGNITION_SRC" && git fetch origin >/dev/null 2>&1 ) || dirty=1
-    local local_head remote_head
+    ( cd "$IGNITION_SRC" && git fetch --tags origin >/dev/null 2>&1 ) || dirty=1
+    local local_head
     local_head=$(git -C "$IGNITION_SRC" rev-parse HEAD 2>/dev/null)
-    remote_head=$(git -C "$IGNITION_SRC" rev-parse origin/HEAD 2>/dev/null || \
-                  git -C "$IGNITION_SRC" rev-parse origin/master 2>/dev/null || \
-                  git -C "$IGNITION_SRC" rev-parse origin/main 2>/dev/null)
-    if [ -z "$local_head" ] || [ -z "$remote_head" ] || [ "$local_head" != "$remote_head" ]; then
+    if [ -z "$local_head" ] || [ "$local_head" != "$IGNITION_COMMIT" ]; then
         dirty=1
     fi
     if [ "$have" = 1 ] && [ "$dirty" = 0 ] && [ -z "$BUILD_FORCE" ]; then
-        return 0    # already built at current upstream commit
+        return 0    # already built at the pinned commit
     fi
 
     # We're actually going to build - make sure the toolchain + SDK are present.
     ensure_build_toolchain
 
     if [ "$dirty" = 1 ] && [ "$have" = 1 ]; then
-        say "Ignition source changed upstream - rebuilding…"
+        say "Ignition source not at $IGNITION_COMMIT - rebuilding…"
     fi
 
-    say "Building Ignition from source (this can take several minutes)…"
+    say "Building Ignition from source at $IGNITION_COMMIT (this can take several minutes)…"
     # Run in background and report progress: the raw build log streams to
     # LOG_FILE, and every 15 s the last log line plus elapsed time is shown
     # so a long compile never looks hung.
     ( cd "$IGNITION_SRC" \
-        && git fetch origin --depth 1 \
-        && ( git checkout -f origin/HEAD 2>/dev/null \
-             || git checkout -f origin/main 2>/dev/null \
-             || git reset --hard origin/master ) \
+        && ( git cat-file -e "$IGNITION_COMMIT^{commit}" 2>/dev/null \
+             || git fetch --depth 1 origin "$IGNITION_COMMIT" ) \
+        && git checkout -f "$IGNITION_COMMIT" \
+        && git reset --hard "$IGNITION_COMMIT" \
         && for p in "$REPO"/build/patches/*.patch; do
                [ -f "$p" ] || continue
                echo "applying $(basename "$p")"

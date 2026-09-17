@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Fixed random driver-load failures (`VRInitError_Init_InterfaceNotFound`,
+  105) that dropped standable for the session, mostly on cold or loaded boots.
+  Upstream Ignition bug: `ignition_server.exe` starts listening before it
+  registers the function the driver asks for, so the driver sometimes gets
+  null back. Server now registers first
+  (`build/patches/ignition-server-registration-order.patch`). Reproduced on a
+  cold boot at load 18.6, which used to fail every time.
+- `launch_serverhelper.sh`: stop deleting the driver's `ignition_ipc_*` shm
+  (broke the handshake), take the lock before the foreign-wineserver sweep so a
+  duplicate helper can't kill the active server, launch via Proton's `wine`
+  binary directly, defer the PSVR2 reg import past the handshake, and keep a
+  server alive through the driver's retry window.
+- `--build-from-source` pins Ignition to `6bb3c8a` instead of tracking
+  `origin/HEAD`. The patches are written against that commit and the build
+  reproduces `vendor/SHA256SUMS`; the branch tip did neither.
+- MANUAL: call `vendor/SHA256SUMS` a reproducibility check, not provenance.
+
 - The installer seeds the current-Proton `S:\` game path into Linux
   `~/.config/openvr/openvrpaths.vrpath` next to the Linux path. Proton
   copies that file into the prefix on every launch and the game validates

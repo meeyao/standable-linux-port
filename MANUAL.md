@@ -23,49 +23,56 @@ cd standable-linux-port
 | `build/vrpathreg2.exe` | prefix `SteamVR/bin/win64/vrpathreg.exe` and `vrmonitor.exe` | Existence-check shims |
 | vrclient DLLs | `$PFX/drive_c/vrclient/bin/` | From the Proton's wine tree |
 
-`vendor/` contents are Ignition (MIT) built from upstream commit `6bb3c8a`
-with the local patch in `build/patches/ignition-rpc-timeout.patch`. The
-`steam_api64.dll` is Valve's Steamworks SDK 1.60 redistributable. Verify
-everything with the hashes in [`vendor/SHA256SUMS`](vendor/SHA256SUMS):
+`vendor/` is Ignition (MIT) built from upstream `6bb3c8a` plus both patches in
+`build/patches/`. `steam_api64.dll` is Valve's Steamworks SDK 1.60
+redistributable. Check the files:
 
 ```sh
 cd vendor && sha256sum -c SHA256SUMS
 ```
 
-Hashes reference the shipped files only. The upstream release is
-[Ignition v1.0.0](https://github.com/BnuuySolutions/Ignition/releases/tag/v1.0.0)
-- its binaries won't match `vendor/SHA256SUMS` because the shipped ones carry
-an extra patch.
+SHA256SUMS is a reproducibility check, not provenance. `--build-from-source`
+builds the same commit + patches, so it should reproduce these hashes. It
+doesn't mean the binaries are safe - read the patches or build them yourself.
 
-### The patch
+Upstream's
+[v1.0.0](https://github.com/BnuuySolutions/Ignition/releases/tag/v1.0.0)
+binaries won't match `vendor/SHA256SUMS`; ours carry the patches below.
+Ignition is MIT, so rebuilding and shipping them is fine.
 
-`build/patches/ignition-rpc-timeout.patch` parametrizes Ignition's RPC
-calls with timeouts. Without it, a call that never gets an answer (e.g. the
-game isn't running) blocks forever, and SteamVR's watchdog aborts the driver
-into Safe Mode after ~20 s. The patch touches 3 files:
+### The patches
 
-- `rpc_core.cpp` / `rpc_core.h` - adds an opt-in `CallMethodTimeout`
-  wrapper around the internal RPC call (which already waited 60 s by
-  default)
-- `rpc_server_tracked_device_provider.cpp` - uses short timeouts for the
-  driver's `Cleanup` (4 s) / `RunFrame` (3 s) so a stalled game DLL can't
-  wedge SteamVR's shutdown watchdog (caught and skipped)
+`ignition-server-registration-order.patch` - fixes random driver-load failures
+(`VRInitError_Init_InterfaceNotFound`, 105). `ignition_server.exe` starts its
+RPC listen thread before registering
+`RPCFunction_Get_ServerTrackedDeviceProvider`. The driver asks for that
+function as soon as it launches the server, so sometimes the server replies
+before it's registered, returns null, and the driver gives up (105) for the
+whole session. Register before listening. One file:
+`projects/ignition_server/main.cpp`.
 
-Upstream later added the same shape independently (`CallWithTimeout` plus a
-5 s time-sync, post-`6bb3c8a`), but only applied it to time-sync - the
-`Cleanup`/`RunFrame` guards here are still the only thing covering the
-watchdogs. If upstream is ever adopted, keep those two call sites (renamed
-to their API) and drop the rest.
+`ignition-rpc-timeout.patch` - puts timeouts on Ignition's RPC calls. Without
+it a call with no answer (game not running) blocks forever and SteamVR's
+watchdog drops the driver into Safe Mode after ~20 s. 3 files:
 
-To reproduce it:
+- `rpc_core.cpp` / `rpc_core.h` - adds `CallMethodTimeout` (the default call
+  already waited 60 s)
+- `rpc_server_tracked_device_provider.cpp` - short timeouts for `Cleanup`
+  (4 s) and `RunFrame` (3 s) so a hung game DLL can't wedge SteamVR's shutdown
+
+Upstream added something similar later (`CallWithTimeout` + a 5 s time-sync,
+post-`6bb3c8a`) but only for time-sync; the `Cleanup`/`RunFrame` guards here
+are still the only ones covering the watchdogs. If upstream ever lands, keep
+those two call sites (renamed) and drop the rest.
+
+To regenerate a patch:
 
 ```sh
 git clone https://github.com/BnuuySolutions/Ignition.git
 cd Ignition
-git checkout 6bb3c8a   # the commit the shipped binaries are built from
-# apply the edits by hand (see build/patches/ignition-rpc-timeout.patch),
-# then regenerate:
-git diff > /path/to/standable-linux-port/build/patches/ignition-rpc-timeout.patch
+git checkout 6bb3c8a
+# edit by hand, then:
+git diff > /path/to/standable-linux-port/build/patches/<name>.patch
 ```
 
 ### Build from source
@@ -77,7 +84,9 @@ PE binaries, and `winebuild` (wine dev tools).
 ```sh
 git clone https://github.com/BnuuySolutions/Ignition.git
 cd Ignition
+git checkout 6bb3c8a   # the commit the shipped binaries are built from
 git apply /path/to/standable-linux-port/build/patches/ignition-rpc-timeout.patch
+git apply /path/to/standable-linux-port/build/patches/ignition-server-registration-order.patch
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
