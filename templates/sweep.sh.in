@@ -12,6 +12,23 @@
 # SteamVR force-aborts shutdown. Kill only Wine processes from another Proton
 # build inside OUR prefix; ours and other prefixes untouched.
 
+# proc_lines - print "pid cmdline" for every process whose full command line
+# matches the extended regex $1. This is a pure-bash /proc scan on purpose:
+# SteamVR loads the driver inside the Steam Linux Runtime (Sniper) sandbox,
+# which ships no `ps`/`pgrep`, so anything running there (the launch helper and
+# this sweep) must not depend on them. Callers that only need a yes/no use
+# `proc_lines PAT | grep -q .`.
+proc_lines() {
+    local pat="$1" d pid cmd
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        [ -r "$d/cmdline" ] || continue
+        cmd="$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)"
+        [ -n "$cmd" ] || continue
+        [[ "$cmd" =~ $pat ]] && printf '%s %s\n' "$pid" "$cmd"
+    done
+}
+
 # same_prefix - true when pid belongs to THIS prefix: Proton-launched processes
 # inherit STEAM_COMPAT_DATA_PATH in their environment (visible in
 # /proc/<pid>/environ). Scoping kills to our own prefix avoids disrupting
@@ -48,13 +65,13 @@ clear_foreign_wineservers() {
     home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && return 0
-    # Candidate scan: ONE pgrep shot. The earlier version read
-    # /proc/<pid>/environ for every wine-ish process on the box, which cost
-    # ~5 s on a loaded system; that alone pushed the server launch outside
-    # SteamVR's two-probe driver window (probe 2 fires ~8 s after probe 1),
-    # and a late handshake reads back as VRInitError 105 / a driver that
-    # "won't load" at boot. Candidates are usually 0-3 PIDs.
-    pgrep -af 'wine|proton|ignition_server' 2>/dev/null | while IFS= read -r line; do
+    # Candidate scan: ONE pass over /proc cmdlines (see proc_lines above).
+    # The earlier version read /proc/<pid>/environ for every wine-ish process
+    # on the box, which cost ~5 s on a loaded system; that alone pushed the
+    # server launch outside SteamVR's two-probe driver window (probe 2 fires
+    # ~8 s after probe 1), and a late handshake reads back as VRInitError 105
+    # / a driver that "won't load" at boot. Candidates are usually 0-3 PIDs.
+    proc_lines 'wine|proton|ignition_server' | while IFS= read -r line; do
         pid="${line%% *}"; rest="${line#* }"
         [ -z "$rest" ] && continue
         case "$rest" in

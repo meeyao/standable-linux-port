@@ -50,6 +50,14 @@ case ":$PATH:" in
     *) PATH="$SCRIPT_DIR:$PATH"; export PATH ;;
 esac
 
+# Stale-wineserver sweep + the sandbox-safe proc_lines(). Sourced here, before
+# any process lookup, because SteamVR loads this driver inside the Steam Linux
+# Runtime (Sniper) sandbox, which ships NO ps/pgrep - so every lookup below and
+# in sweep.sh uses proc_lines() (/proc scan) instead of pgrep.
+if [ -f "$SCRIPT_DIR/sweep.sh" ]; then
+    . "$SCRIPT_DIR/sweep.sh"
+fi
+
 # Pin CWD to the driver's directory (ignition.json sits beside this script
 # and beside the server exe passed as $1).
 # ignition_server resolves its driver_dll ("../win64/driver_standable.dll")
@@ -82,7 +90,7 @@ if [ -f "$SCRIPT_DIR/proton_resolve.sh" ]; then
     unset _R
 fi
 logh "proton: $PROTON"
-logh "wineservers before sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
+logh "wineservers before sweep: $(proc_lines 'wineserver' 2>/dev/null | tr '\n' ';')"
 S_LINK="$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/s:"
 # Drive convention differs by Proton build: newer Valve Protons manage the
 # s: drive themselves (gamedrive -> Steam PARENT dir, paths like
@@ -103,11 +111,8 @@ else
 fi
 fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 
-# Stale-wineserver sweep lives in sweep.sh (shared with the launch hook);
-# it needs PROTON + STEAM_COMPAT_DATA_PATH, both set above.
-if [ -f "$SCRIPT_DIR/sweep.sh" ]; then
-    . "$SCRIPT_DIR/sweep.sh"
-fi
+# (sweep.sh was sourced right after SCRIPT_DIR/PATH were set up, so
+# proc_lines() and clear_foreign_wineservers() are available here.)
 
 # Fix SteamVR state: a transient handshake timeout can leave the driver
 # disabled or SteamVR in safe mode. Clear every blocker before driver load so
@@ -169,7 +174,7 @@ fix_vrchat() {
 # Free the prefix of any foreign-Proton leftover wineserver BEFORE we touch it:
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers
-logh "wineservers after sweep: $(pgrep -a wineserver 2>/dev/null | tr '\n' ';')"
+logh "wineservers after sweep: $(proc_lines 'wineserver' 2>/dev/null | tr '\n' ';')"
 # Defer the PSVR2 reg import: it's a second cold Proton boot and racing the
 # server boot costs the handshake. 20 s is well inside the session.
 ( sleep 20; "$PROTON" run reg import ./wine_psvr2_hidraw.reg ) >/dev/null 2>&1 &
@@ -211,8 +216,8 @@ mkdir -p "$(dirname "$SERVER_LOG")"
 #   python3 .../proton run  .../ignition_server.exe ...
 #   c:\windows\system32\steam.exe  .../ignition_server.exe ...
 _server_running() {
-    pgrep -f 'proton run .*ignition_server\.exe' >/dev/null 2>&1 && return 0
-    pgrep -f 'steam\.exe .*ignition_server\.exe' >/dev/null 2>&1 && return 0
+    proc_lines 'proton run .*ignition_server\.exe' 2>/dev/null | grep -q . && return 0
+    proc_lines 'steam\.exe .*ignition_server\.exe' 2>/dev/null | grep -q . && return 0
     return 1
 }
 
@@ -221,8 +226,12 @@ _server_running() {
 [ -n "${2:-}" ] && printf '%s' "$2" > "${XDG_STATE_HOME:-$HOME/.local/state}/standable/current_secret" 2>/dev/null
 
 # Parent is the vrserver process that loaded the driver shim; when it exits
-# (SteamVR quits) the helper must stop respawning.
-_seppid="$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')"
+# (SteamVR quits) the helper must stop respawning. bash's $PPID is used
+# instead of `ps -o ppid= -p $$`: SteamVR runs this driver inside the Steam
+# Linux Runtime (Sniper) sandbox, which has no `ps`, so the old form returned
+# empty and the loop below broke instantly - the server never launched and
+# SteamVR aborted on the load_drivers watchdog.
+_seppid="$PPID"
 _repair_pid="${_repair_pid:-}"
 
 # Server runs stay in the foreground so Proton keeps normal signal behavior;

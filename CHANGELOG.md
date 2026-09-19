@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Fixed the actual crash on a fresh install: `launch_serverhelper.sh` never
+  launched the server, so the driver's `load_drivers` thread hung and SteamVR
+  aborted after ~21 s (then Safe Mode / error 301, then the
+  `blocked_by_safe_mode` loop). SteamVR loads the driver inside the Steam
+  Linux Runtime (Sniper) sandbox, which ships **no `ps` and no `pgrep`**. The
+  helper read its parent PID with `ps -o ppid= -p $$` (empty in the sandbox,
+  so the supervision loop's liveness check `[ -d /proc/$_seppid ]` broke
+  immediately) and used `pgrep` for the server single-instance guard and the
+  stale-wineserver sweep. It now uses bash's `$PPID` and a pure-bash
+  `/proc/<pid>/cmdline` scan (`proc_lines()`, in `sweep.sh`, shared with the
+  hook). No `server.out` was ever written because the launch line was never
+  reached. Reproduced and fixed on a clean testing/rc install: the helper now
+  launches the server and SteamVR loads the driver instead of aborting.
 - Bound the driver's handshake call to 15 s. It waited the full 60 s default,
   so a server that never answered hung SteamVR's `load_drivers` thread past
   its ~21 s watchdog, aborting all of vrserver and landing in the Safe-Mode /
