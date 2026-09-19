@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bound the driver's handshake call to 15 s. It waited the full 60 s default,
+  so a server that never answered hung SteamVR's `load_drivers` thread past
+  its ~21 s watchdog, aborting all of vrserver and landing in the Safe-Mode /
+  error-301 loop. A dead server now skips standable instead.
+- `./standable check` flags the `load_drivers` watchdog abort instead of
+  reporting vrserver.txt clean.
 - Fixed random driver-load failures (`VRInitError_Init_InterfaceNotFound`,
   105) that dropped standable for the session, mostly on cold or loaded boots.
   Upstream Ignition bug: `ignition_server.exe` starts listening before it

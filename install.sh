@@ -947,6 +947,12 @@ PY
         else
             ok "vrserver.txt clean of known failure patterns"
         fi
+        # The driver hung past SteamVR's ~21s load_drivers watchdog, which
+        # aborts all of vrserver and lands it in safe mode. Usually the server
+        # didn't answer; serverhelper.log shows what it did.
+        if tail -n 400 "$LOG" | grep -aq "Watchdog timeout in thread Connection load_drivers"; then
+            warn "SteamVR load_drivers watchdog abort (standable driver hung >21s). Check serverhelper.log; re-run ./standable install then restart SteamVR"
+        fi
         # SteamVR error 307: "A key component of SteamVR isn't working" -
         # a vrcompositor/vulkan startup failure. Pull the smoking-gun lines.
         # NB: avoid matching "307" inside microsecond timestamps.

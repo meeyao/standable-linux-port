@@ -52,18 +52,21 @@ whole session. Register before listening. One file:
 `projects/ignition_server/main.cpp`.
 
 `ignition-rpc-timeout.patch` - puts timeouts on Ignition's RPC calls. Without
-it a call with no answer (game not running) blocks forever and SteamVR's
-watchdog drops the driver into Safe Mode after ~20 s. 3 files:
+it a call with no answer blocks for the full 60 s default and SteamVR's ~21 s
+watchdog aborts all of vrserver (the Safe-Mode loop). 4 files:
 
 - `rpc_core.cpp` / `rpc_core.h` - adds `CallMethodTimeout` (the default call
   already waited 60 s)
+- `driver_ignition/driver.cpp` - bounds the driver's handshake call to 15 s,
+  so a dead server skips standable instead of hanging SteamVR's load_drivers
+  thread
 - `rpc_server_tracked_device_provider.cpp` - short timeouts for `Cleanup`
   (4 s) and `RunFrame` (3 s) so a hung game DLL can't wedge SteamVR's shutdown
 
 Upstream added something similar later (`CallWithTimeout` + a 5 s time-sync,
-post-`6bb3c8a`) but only for time-sync; the `Cleanup`/`RunFrame` guards here
-are still the only ones covering the watchdogs. If upstream ever lands, keep
-those two call sites (renamed) and drop the rest.
+post-`6bb3c8a`) but only for time-sync; the driver handshake, `Cleanup` and
+`RunFrame` guards here are still the only ones covering the watchdogs. If
+upstream ever lands, keep those call sites (renamed) and drop the rest.
 
 To regenerate a patch:
 
