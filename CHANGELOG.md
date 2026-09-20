@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- Fixed the actual crash on a fresh install: `launch_serverhelper.sh` never
+  launched the server, so the driver's `load_drivers` thread hung and SteamVR
+  aborted after ~21 s (then Safe Mode / error 301, then the
+  `blocked_by_safe_mode` loop). SteamVR loads the driver inside the Steam
+  Linux Runtime (Sniper) sandbox, which ships **no `ps` and no `pgrep`**. The
+  helper read its parent PID with `ps -o ppid= -p $$` (empty in the sandbox,
+  so the supervision loop's liveness check `[ -d /proc/$_seppid ]` broke
+  immediately) and used `pgrep` for the server single-instance guard and the
+  stale-wineserver sweep. It now uses bash's `$PPID` and a pure-bash
+  `/proc/<pid>/cmdline` scan (`proc_lines()`, in `sweep.sh`, shared with the
+  hook). No `server.out` was ever written because the launch line was never
+  reached. Reproduced and fixed on a clean testing/rc install: the helper now
+  launches the server and SteamVR loads the driver instead of aborting.
+- Bound the driver's handshake call to 15 s. It waited the full 60 s default,
+  so a server that never answered hung SteamVR's `load_drivers` thread past
+  its ~21 s watchdog, aborting all of vrserver and landing in the Safe-Mode /
+  error-301 loop. A dead server now skips standable instead.
+- `./standable check` flags the `load_drivers` watchdog abort instead of
+  reporting vrserver.txt clean.
+- Fixed random driver-load failures (`VRInitError_Init_InterfaceNotFound`,
+  105) that dropped standable for the session, mostly on cold or loaded boots.
+  Upstream Ignition bug: `ignition_server.exe` starts listening before it
+  registers the function the driver asks for, so the driver sometimes gets
+  null back. Server now registers first
+  (`build/patches/ignition-server-registration-order.patch`). Reproduced on a
+  cold boot at load 18.6, which used to fail every time.
+- `launch_serverhelper.sh`: stop deleting the driver's `ignition_ipc_*` shm
+  (broke the handshake), take the lock before the foreign-wineserver sweep so a
+  duplicate helper can't kill the active server, launch via Proton's `wine`
+  binary directly, defer the PSVR2 reg import past the handshake, and keep a
+  server alive through the driver's retry window.
+- `--build-from-source` pins Ignition to `6bb3c8a` instead of tracking
+  `origin/HEAD`. The patches are written against that commit and the build
+  matches `vendor/` in code, not byte-for-byte (the `.exe` outputs embed a
+  linker timestamp); the branch tip matched neither.
+- MANUAL: `vendor/SHA256SUMS` pins the shipped bytes, not provenance, and a
+  rebuild isn't byte-identical (`sha256sum -c` is for the vendored copies).
+
 - The installer seeds the current-Proton `S:\` game path into Linux
   `~/.config/openvr/openvrpaths.vrpath` next to the Linux path. Proton
   copies that file into the prefix on every launch and the game validates

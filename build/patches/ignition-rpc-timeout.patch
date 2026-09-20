@@ -104,3 +104,28 @@ index 63ec9b6..fbf9c12 100644
      }
      else {
          real_provider_->RunFrame();
+diff --git a/projects/driver_ignition/driver.cpp b/projects/driver_ignition/driver.cpp
+index 44a6771..be21d1c 100644
+--- a/projects/driver_ignition/driver.cpp
++++ b/projects/driver_ignition/driver.cpp
+@@ -3,6 +3,7 @@
+ #include "config.h"
+ 
+ #include <json.hpp>
++#include <chrono>
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+@@ -188,7 +189,11 @@ void *HmdDriverFactory(const char *pInterfaceName, int *pReturnCode) {
+         }
+ 
+         try {
+-            RpcValue provider_val = RpcSystem::Call(RPCFunction_Get_ServerTrackedDeviceProvider, RpcValue());
++            // Bound this wait. The default is 60s, but SteamVR's load_drivers
++            // watchdog kills all of vrserver after ~21s, so a dead or slow
++            // server would abort the whole runtime instead of just us. Time
++            // out under the watchdog and let the driver load fail cleanly.
++            RpcValue provider_val = RpcSystem::CallMethodTimeout(0, RPCFunction_Get_ServerTrackedDeviceProvider, std::chrono::seconds(15), RpcValue());
+             if (provider_val.isObject()) {
+                  if (pReturnCode) *pReturnCode = vr::VRInitError_None;
+                  g_pProviderProxy = static_cast<RpcServerTrackedDeviceProvider*>(provider_val.asObject());

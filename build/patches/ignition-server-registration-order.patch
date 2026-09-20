@@ -1,0 +1,30 @@
+diff --git a/projects/ignition_server/main.cpp b/projects/ignition_server/main.cpp
+index c87a7f5..22a2acf 100644
+--- a/projects/ignition_server/main.cpp
++++ b/projects/ignition_server/main.cpp
+@@ -133,18 +133,23 @@ int main(int argc, char *argv[]) {
+         return -1;
+     }
+ 
+-    RpcSystem::ConnectToExistingIPC();
+-
+     // Create the RPC wrapper for the real provider.
+     g_pRpcProvider = new RpcServerTrackedDeviceProvider(pRealDeviceProvider);
+ 
+     // Register a function that the client can call to get a proxy to our
+     // provider. We'll register it on a special "static" object with ID 0.
++    //
++    // Do this before ConnectToExistingIPC(). That starts the listen thread,
++    // and the driver asks for this function right after it launches us. If
++    // the request lands first the server sends null and the driver fails
++    // with 105.
+     RpcSystem::RegisterFunction(RPCFunction_Get_ServerTrackedDeviceProvider, [](const auto &args) {
+         auto val = RpcValue(g_pRpcProvider);
+         return val;
+     });
+ 
++    RpcSystem::ConnectToExistingIPC();
++
+     std::cout << "Ignition server running." << std::endl;
+ 
+     while (true) {
