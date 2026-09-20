@@ -35,8 +35,10 @@
   server alive through the driver's retry window.
 - `--build-from-source` pins Ignition to `6bb3c8a` instead of tracking
   `origin/HEAD`. The patches are written against that commit and the build
-  reproduces `vendor/SHA256SUMS`; the branch tip did neither.
-- MANUAL: call `vendor/SHA256SUMS` a reproducibility check, not provenance.
+  matches `vendor/` in code, not byte-for-byte (the `.exe` outputs embed a
+  linker timestamp); the branch tip matched neither.
+- MANUAL: `vendor/SHA256SUMS` pins the shipped bytes, not provenance, and a
+  rebuild isn't byte-identical (`sha256sum -c` is for the vendored copies).
 
 - The installer seeds the current-Proton `S:\` game path into Linux
   `~/.config/openvr/openvrpaths.vrpath` next to the Linux path. Proton

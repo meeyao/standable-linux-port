@@ -31,9 +31,12 @@ redistributable. Check the files:
 cd vendor && sha256sum -c SHA256SUMS
 ```
 
-SHA256SUMS is a reproducibility check, not provenance. `--build-from-source`
-builds the same commit + patches, so it should reproduce these hashes. It
-doesn't mean the binaries are safe - read the patches or build them yourself.
+SHA256SUMS pins the exact binaries we ship - a check, not provenance.
+`--build-from-source` compiles the same commit + patches, but the hashes are
+not byte-reproducible: the Windows `.exe` outputs embed a linker timestamp, so
+a local build matches `vendor/` in code but not in bytes. `sha256sum -c`
+verifies the shipped copies; don't read a rebuild's hash mismatch as tampering.
+None of this means the binaries are safe - read the patches or build your own.
 
 Upstream's
 [v1.0.0](https://github.com/BnuuySolutions/Ignition/releases/tag/v1.0.0)
