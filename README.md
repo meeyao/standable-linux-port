@@ -1,43 +1,44 @@
 # Standable FBE Linux Patch (Unofficial)
 
-> `testing/rc` is the maintained branch. `main` is stale.
->
-> Note: some code here was written with the help of an LLM. It's been
-> reviewed and tested, but it's worth a skim before you rely on it -
-> especially anything that kills processes or edits config files.
+Run **Standable Full Body Estimation on Linux** using its Windows binaries through Proton.
 
-Runs Standable Full Body Estimation on Linux using the game's own Windows
-binaries: driver, GUI window, realtime settings, T-pose calibration.
-The game's own files stay untouched: the patch only adds helper files next to
-them (a few in `bin/linux64/`) and places `steam_api64.dll` beside the
-Windows driver in `bin/win64/`. No game file is overwritten or removed.
+> **Use the `testing/rc` branch.** `main` is stale and does not have the latest fixes.
 
-Based on [Ignition](https://github.com/BnuuySolutions/Ignition) by
-Bnuuy Solutions (MIT). It provides the SteamVR-Proton bridge used here;
-see `vendor/IGNITION-LICENSE`. This project is licensed under
-[MIT](LICENSE). Prefer not to use the prebuilt binaries in `vendor/`?
-[MANUAL.md](MANUAL.md) covers hash verification, substituting the
-official upstream release, and building from source.
+This patch adds the Linux bits Standable needs without modifying or replacing the game's original files. It adds a few helper files in the game's `bin/linux64/` folder and places `steam_api64.dll` beside the Windows driver in `bin/win64/`, plus a SteamVR driver, desktop settings window support, realtime settings, and T-pose calibration.
 
-## Requirements
+Some code was written with LLM assistance. It has been reviewed and tested, but skim it before relying on it, especially anything that kills processes or changes config files.
 
-Linux with a native (non-Flatpak) Steam install, plus:
+## Quick Start
 
-- **SteamVR** installed
-- Standable Full Body Estimation installed (AppId **2370570**, any library drive)
-- A **Proton build**. `proton-cachyos-slr` and `DW-Proton` are verified end to
-  end; Proton-GE, Experimental, and Proton 10 also work. See
-  [Driver-tested Proton builds](#driver-tested-proton-builds).
-- **Steam Linux Runtime 4.0 (Sniper)**. SteamVR runs this driver inside its
-  Sniper sandbox, which only ships Python 3.9 - but modern Proton launchers
-  need Python >= 3.11 (`from typing import Self`), so Proton dies before the
-  server starts and SteamVR aborts after ~20 s (Safe Mode). The installer
-  deploys a `python3` shim that uses a capable host python when one exists,
-  and falls back to the Runtime's own python3.13 otherwise. If the Runtime is
-  missing, the installer offers to install it. You don't need to configure
-  anything - just don't uninstall it.
+### 1. Install the requirements
 
-## Install
+You need:
+
+* Native Steam (not Flatpak)
+* SteamVR
+* Standable Full Body Estimation (AppID `2370570`)
+* A Proton version
+* Steam Linux Runtime 4.0 (Sniper)
+
+You install SteamVR and Standable yourself. The installer sets up everything else, including Steam Linux Runtime 4.0.
+
+### 2. Pick a Proton for Standable
+
+In Steam:
+
+**Standable → Properties → Compatibility**
+
+Enable:
+
+> Force the use of a specific Steam Play compatibility tool
+
+Pick a Proton.
+
+If Steam was already open, **restart Steam** after changing it.
+
+Some known-working versions are listed below.
+
+### 3. Install the patch
 
 ```sh
 git clone -b testing/rc https://github.com/meeyao/standable-linux-port.git
@@ -45,150 +46,424 @@ cd standable-linux-port
 ./install.sh
 ```
 
-(`testing/rc` is the actively-maintained branch. `main` is older/stable and
-won't have the recent fixes - use `testing/rc` unless you specifically want
-the older stable line.)
+You can safely run the installer again later. It repairs the installation and picks up changes.
 
-Older releases had a `./standable gui` command and a "Standable GUI" desktop
-entry. Both are gone. The launch hook replaces them.
+To see what it would do without changing anything:
 
-Then launch it through Steam as you would any other title. Start **SteamVR**,
-then click **Play** on Standable. The game can be on any Steam library drive -
-the installer finds it.
-
-To get the settings window on your desktop (instead of only in VR), set the
-launch hook as the game's Launch Options - right-click **Standable** in Steam
-→ **Properties** → **Launch Options**, set:
+```sh
+./install.sh --dry-run
 ```
+
+### 4. Add the launch option
+
+Go back to:
+
+**Standable → Properties → General → Launch Options**
+
+Add:
+
+```sh
 bash ~/.local/bin/standable_launch_hook.sh %command%
 ```
-The hook runs the game in host context so the desktop window renders while
-SteamVR runs, and keeps the game and driver on the same Proton/prefix. Without
-it, Steam launches the game as a VR overlay and there's no desktop window.
-Always launch through Steam, not by starting Standable.exe directly - the
-game's Steam authentication fails otherwise.
 
-Don't want to run the installer? [MANUAL.md](MANUAL.md) walks through the
-same steps by hand, and `./install.sh --dry-run` prints every command with
-your real paths.
+This runs the game in the host environment, so its desktop settings window works while SteamVR is running and the game and driver stay on one shared Proton prefix.
 
-## Options
+### 5. Start SteamVR
 
-| Command | What it does |
-|---|---|
-| `./standable install` | Install or repair (safe to re-run) |
-| `./standable check` | Verify the installed setup |
-| `./standable uninstall` | Remove everything this patch added |
-| `./standable install --proton PATH` | Use a specific Proton build |
-| `./standable install --build` | Rebuild the driver bridge from source (needs dev tools; prebuilt files are used otherwise) |
-| `./standable install --no-safemode` | Persist `steamvr.enableSafeMode=false` so SteamVR stops hiding add-ons after a crash |
+Start SteamVR **before** launching Standable.
 
-## Switching Protons
+The Standable skeleton/trackers should appear in SteamVR even before the game is running.
 
-The driver and the game must always use **the same** Proton. If several
-Proton builds are installed, the installer asks which one to use - but that
-choice is only a fallback. The driver and the game always use the Proton
-picked in Steam, so the two stay in sync. To switch:
-
-1. In **Steam**, right-click **Standable** → **Properties** →
-   **Compatibility** → force a Proton.
-2. If Steam was already open, **restart Steam**.
-3. **Re-run `./install.sh`**, then **restart SteamVR** - the driver only
-   picks up the new build on a fresh boot. A leftover wineserver from the
-   old build can hold the prefix and block startup (Safe Mode ~20 s crash);
-   the installer clears stale processes automatically.
-
-### Driver-tested Proton builds
-
-Verified end to end on the dev machine:
-
-| Proton | Version tested | Result |
-|---|---|---|
-| `proton-cachyos-slr` | cachyos-11.0-20260703-slr | Works |
-| `DW-Proton Latest` | dwproton-11.0-12 | Works |
-| `Proton - Experimental` | experimental-11.0-20260826 | Works |
-| `Proton-CachyOS Latest` | cachyos-11.0-20260703-slr | Works |
-| `Proton-GE Latest` | GE-Proton11-6 | Works |
-| `Proton 10.0` | 10.0 | Works |
-| `Proton-GE RTSP Latest` | proton-rtsp-11.0-20260609-3 | Works |
-
-If a build launches and closes instantly via Steam, switch to a different
-Proton in Steam (→ Properties → Compatibility) and re-run `./install.sh`.
-A leftover wineserver from a previous Proton is the usual cause of the
-~20 s Safe-Mode crash; `./install.sh` clears it automatically.
-
-## Logging & diagnostics
-
-All logs live in `~/.local/state/standable/`:
-
-| File | What it records |
-|---|---|
-| `install.log` | Every installer run + `./standable check` full system dump |
-| `hook.log` | Each game launch through the launch hook (Proton used, exit code) |
-| `serverhelper.log` | Each driver-server launch (Proton used, wineservers before/after sweep, server exit) |
-
-`./standable check` verifies the setup and appends the full system dump (OS,
-GPU, display server, Steam/Proton/game, prefix, SteamVR settings, crash
-signatures) to `install.log`:
+If they don't:
 
 ```sh
 ./standable check
-cat ~/.local/state/standable/install.log
 ```
 
-When filing an issue, attach the `./standable check` log. If the driver or
-game is failing to launch, also attach `hook.log` and `serverhelper.log` -
-they show the actual launch attempt where `install.log` can't.
+Then see [Troubleshooting](#troubleshooting).
+
+### 6. Launch Standable
+
+Click **Play** on Standable in Steam.
+
+The normal Standable settings window should appear on your desktop while SteamVR is running.
+
+**Always launch Standable through Steam.**
+
+Launching `Standable.exe` directly will fail Steam authentication.
+
+---
+
+## Requirements
+
+### Steam
+
+You need a normal native Steam installation.
+
+Flatpak Steam is not supported.
+
+### SteamVR
+
+Install SteamVR normally through Steam.
+
+### Standable
+
+Install **Standable Full Body Estimation** from Steam.
+
+AppID:
+
+```text
+2370570
+```
+
+The installer finds the game even if it is installed on another library drive.
+
+### Proton
+
+Standable needs a Proton build forced through Steam.
+
+These have been tested:
+
+| Proton                | Version tested              |
+| --------------------- | --------------------------- |
+| proton-cachyos-slr    | cachyos-11.0-20260703-slr   |
+| DW-Proton Latest      | dwproton-11.0-12            |
+| Proton Experimental   | experimental-11.0-20260826  |
+| Proton-CachyOS Latest | cachyos-11.0-20260703-slr   |
+| Proton-GE Latest      | GE-Proton11-6               |
+| Proton 10             | 10.0                        |
+| Proton-GE RTSP Latest | proton-rtsp-11.0-20260609-3 |
+
+If one Proton doesn't work, try another and run the installer again.
+
+### Steam Linux Runtime 4.0
+
+SteamVR runs the driver inside its Steam Linux Runtime 4.0 (Sniper) environment, which only ships Python 3.9. Modern Proton launchers need Python 3.11 or newer (`from typing import Self`), so without a newer Python Proton dies before the server starts and SteamVR aborts after ~20 seconds.
+
+The installer deploys a `python3` shim that finds a working interpreter, and it checks for the Runtime and offers to install it if it is missing.
+
+You don't need to configure anything. Just leave it installed.
+
+---
+
+## Commands
+
+The easiest way to interact with the patch is `./standable`.
+
+| Command                             | What it does                                   |
+| ----------------------------------- | ---------------------------------------------- |
+| `./standable install`               | Install or repair the patch                    |
+| `./standable check`                 | Check the installation and collect diagnostics |
+| `./standable uninstall`             | Remove everything added by this patch          |
+| `./standable install --proton PATH` | Use a specific Proton                          |
+| `./standable install --build`       | Build the driver bridge from source            |
+| `./standable install --no-safemode` | Stop SteamVR from hiding drivers after a crash |
+
+`./standable` and `./install.sh` are both supported.
+
+---
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| SteamVR crashes / enters safe mode ~20 s after startup | Run `./standable install` (clears stale wineservers), then restart SteamVR. If it persists, attach `serverhelper.log` |
-| Driver won't load, SteamVR log says "blocked by a previous safe mode event" | A crash leaves block markers behind. Re-run `./standable install` (or launch the game once via the hook - it clears them), then restart SteamVR |
-| `VRInitError_Init_InterfaceNotFound(105)` / "Could not create interface in driver standable" | The shim loaded but its server never answered. Two known causes: an old `ignition_server.exe` (pre-registration-fix - re-run `./standable install` on `testing/rc`), or a stale server from an earlier session blocking the helper. If `serverhelper.log` shows `spawn skipped` with no `server exit`, fully quit SteamVR, run `pkill -f ignition_server.exe`, then start SteamVR. `./standable check` now flags both |
-| Game launches but no GUI | Make sure SteamVR is running and the launch hook is set (see Install); check `./standable check` |
-| "SteamVR driver path is missing" dialog on every boot | Cosmetic - the driver loads anyway. Re-run `./standable install`: it seeds the Wine-resolvable path entry the game's check needs (Proton overwrites the Windows-side copy every launch, wiping any manual Fix-It) |
-| Driver exit-1 loops / won't load while everything else checks pass | A stale Proton helper (`xalia.exe`) may squat on the prefix across SteamVR restarts, invisible to the sweeps. `./standable check` lists them - kill STALE-flagged PIDs (plain `kill`), restart SteamVR |
-| "Steam authentication failed" dialog | Launch through Steam, not by starting Standable.exe directly |
-| Sliders don't apply in realtime | Re-run `./standable install`, restart SteamVR |
-| T-pose fails intermittently | Re-run `./standable install` (repairs drive links), restart SteamVR |
-| Settings window shows a checkerboard background on the desktop | Cosmetic render bug on some Protons, nothing breaks, and it resolves on its own (mechanism unknown). `proton-cachyos-slr` renders it correctly from the start - switch to it if the pattern bothers you |
-| "no Proton builds found" | Pass `--proton /path/to/proton`, or install any Proton build |
-| Anything else | Open an issue with the `./standable check` log attached |
+### Start here
+
+If something isn't working, run:
+
+```sh
+./standable check
+```
+
+It checks the installation and writes diagnostics to:
+
+```text
+~/.local/state/standable/install.log
+```
+
+### No Standable skeleton in SteamVR
+
+Fully quit SteamVR and try:
+
+```sh
+pkill -f ignition_server.exe
+```
+
+Then start SteamVR again.
+
+If that doesn't help:
+
+```sh
+./standable install
+```
+
+and restart SteamVR.
+
+### VRInitError_Init_InterfaceNotFound (105)
+
+SteamVR loaded the driver but its server never answered.
+
+This usually means a stale server from an earlier session is blocking the helper:
+
+1. Fully quit SteamVR.
+2. Run:
+
+```sh
+pkill -f ignition_server.exe
+```
+
+3. Start SteamVR again.
+
+If it still happens, run:
+
+```sh
+./standable install
+```
+
+Then restart SteamVR.
+
+`./standable check` flags this error automatically.
+
+### SteamVR crashes or enters Safe Mode after ~20 seconds
+
+Run:
+
+```sh
+./standable install
+```
+
+Then restart SteamVR.
+
+This usually means an old Proton/Wine process is still holding the Standable prefix.
+
+### SteamVR says the driver was blocked by Safe Mode
+
+Run:
+
+```sh
+./standable install
+```
+
+Then restart SteamVR.
+
+The installer clears the block left behind by previous crashes.
+
+### Standable launches but there is no desktop window
+
+Make sure:
+
+1. SteamVR is running.
+2. The launch option from [Quick Start](#quick-start) is set.
+3. `./standable check` passes.
+
+### "Steam authentication failed"
+
+Launch Standable through **Steam**.
+
+Do not run `Standable.exe` directly.
+
+### "SteamVR driver path is missing"
+
+Usually harmless. The driver can still load.
+
+Run:
+
+```sh
+./standable install
+```
+
+The installer fixes the path used by Standable's check.
+
+### Driver keeps exiting with code 1
+
+Run:
+
+```sh
+./standable check
+```
+
+If it reports stale `xalia.exe` processes, kill the PIDs marked `STALE`:
+
+```sh
+kill <PID>
+```
+
+Then restart SteamVR.
+
+### Sliders don't update in realtime
+
+Run:
+
+```sh
+./standable install
+```
+
+Then restart SteamVR.
+
+### T-pose calibration doesn't work
+
+Run:
+
+```sh
+./standable install
+```
+
+Then restart SteamVR.
+
+### Checkerboard background in the settings window
+
+This is a cosmetic Proton rendering bug.
+
+It doesn't normally affect Standable.
+
+`proton-cachyos-slr` renders the window correctly from the start.
+
+### "No Proton builds found"
+
+Either install a Proton build or tell the installer where it is:
+
+```sh
+./standable install --proton /path/to/proton
+```
+
+### Still broken?
+
+Open an issue and attach:
+
+```sh
+~/.local/state/standable/install.log
+```
+
+If Standable or the driver fails to start, also attach:
+
+```text
+~/.local/state/standable/serverhelper.log
+~/.local/state/standable/server.out
+~/.local/state/standable/hook.log
+```
+
+---
+
+## Switching Proton Versions
+
+You only need to do this if you want to change Proton.
+
+The **game and driver must use the same Proton**.
+
+### 1. Change Proton in Steam
+
+**Standable → Properties → Compatibility**
+
+Pick the Proton you want.
+
+### 2. Restart Steam
+
+If Steam was already running when you changed it, restart Steam.
+
+### 3. Run the installer again
+
+```sh
+./install.sh
+```
+
+### 4. Restart SteamVR
+
+That's it.
+
+The installer copies the required Proton `vrclient` files and clears old Wine processes that can otherwise keep the old Proton alive.
+
+---
+
+## Logging
+
+Logs are stored here:
+
+```text
+~/.local/state/standable/
+```
+
+| File                | Contains                                                |
+| ------------------- | ------------------------------------------------------- |
+| `install.log`       | Installer runs and full `./standable check` diagnostics |
+| `serverhelper.log`  | Driver/server launches and Proton information           |
+| `server.out`        | Standable/driver server output                          |
+| `proton-server.log` | Proton startup output for the driver server             |
+| `hook.log`          | Game launches through the launch hook                   |
+| `game.log`          | Standable's own output                                  |
+
+For a bug report, start with:
+
+```sh
+./standable check
+```
+
+Then attach the relevant logs.
+
+---
 
 ## Compatibility
 
-- Tested with **Steam Link** (on-PC and local network).
-- **WiVRN** does not work with this patch.
-- **ALVR** has not been tested yet.
-- Standable's **mixed tracking** (combining Standable with SlimeVR,
-  hardware trackers, etc.) works as it does on Windows.
-- The installer adds the Standable driver entry to
-  `~/.config/openvr/openvrpaths.vrpath` without touching existing entries.
-  Custom drivers stay in place.
+* **Steam Link:** tested and working
+* **WiVRN:** work in progress
+* **ALVR:** unstable
+* **Mixed tracking:** supported, including Standable + SlimeVR + hardware trackers
+* Existing OpenVR drivers are left alone
 
-## How it works
+The installer adds Standable to:
 
-SteamVR loads a small Linux helper (`driver_standable.so`) as a driver. The
-helper starts the Windows server (`ignition_server.exe`) with Proton inside
-the game's folder, and the game is launched in host context by the launch
-hook so its desktop settings window renders while SteamVR runs. Game and
-driver pick the same Proton at startup and talk through shared memory. That
-shared link is what makes settings updates instant.
+```text
+~/.config/openvr/openvrpaths.vrpath
+```
 
-The two known failure modes are handled by the installer:
-- Proton needs a modern python (`from typing import Self`) but SteamVR's
-  sandbox ships an older one, so Proton dies before the server starts and
-  SteamVR aborts after ~20 s (Safe Mode). The installer deploys a `python3`
-  shim that resolves a working interpreter; `./standable check` verifies it
-  and offers to install Steam Linux Runtime 4.0 if missing.
-- SteamVR force-aborts shutdown can leave the old Proton's Wine processes
-  orphaned, holding the prefix and blocking the next launch. The launch
-  scripts sweep foreign-Proton processes in the game's prefix before starting.
+without removing existing driver entries.
+
+---
+
+## How It Works
+
+If you're curious about what's actually happening:
+
+SteamVR loads a small Linux driver:
+
+```text
+driver_standable.so
+```
+
+That driver starts Standable's Windows server:
+
+```text
+ignition_server.exe
+```
+
+using Proton.
+
+The launch hook starts the game in the host environment so its desktop settings window can appear normally while SteamVR is running.
+
+The game and driver use the same Proton prefix and communicate through shared memory, which is what allows settings to update in realtime.
+
+The installer also handles two annoying Linux/Proton problems:
+
+* SteamVR's runtime can have an old Python version that is too old for modern Proton launchers. The installer provides a `python3` shim and checks that a usable Python is available.
+* SteamVR can leave Wine/Proton processes behind after shutting down. Those processes can keep the prefix locked, so the installer cleans up stale processes before starting again.
+
+---
+
+## Manual Installation / Building
+
+Don't need this unless you want to replace the bundled binaries or build things yourself.
+
+See [MANUAL.md](MANUAL.md) for:
+
+* Hash verification
+* Replacing the bundled binaries with official upstream releases
+* Building the driver bridge from source
+
+The bundled Ignition components come from [Bnuuy Solutions/Ignition](https://github.com/BnuuySolutions/Ignition) and are licensed under MIT. See `vendor/IGNITION-LICENSE`.
+
+---
 
 ## Credits
 
-- [Ignition](https://github.com/BnuuySolutions/Ignition) by Bnuuy Solutions (MIT)
-- Standable Full Body Estimation by the Standable developers. This project is
-  not affiliated with or endorsed by them.
+* [Ignition](https://github.com/BnuuySolutions/Ignition) by Bnuuy Solutions, MIT
+* Standable Full Body Estimation by the Standable developers
+
+This project is licensed under [MIT](LICENSE). It is unofficial and is not
+affiliated with or endorsed by Standable.

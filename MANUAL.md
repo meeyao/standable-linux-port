@@ -1,116 +1,37 @@
-# Standable FBE Linux patch - manual install
+# Standable FBE Linux Patch - Manual Install
 
-Everything the installer does, done by hand. You're copying files into your
-Steam install and a Wine prefix. No script involved.
+This is the manual version of the installer.
 
-You need: a Linux Steam install with the game (AppId 2370570) and SteamVR, a
-Proton build, and this repo checked out for the binaries and templates.
+You're copying the files into your Steam installation and Standable's Proton prefix yourself. No installer script is used.
+
+> **Use the `testing/rc` branch.** `main` is stale.
+
+## Before You Start
+
+You need:
+
+* Native Linux Steam
+* SteamVR
+* Standable Full Body Estimation (AppID `2370570`)
+* A Proton build
+* This repository
+
+Get the repository:
 
 ```sh
 git clone -b testing/rc https://github.com/meeyao/standable-linux-port.git
 cd standable-linux-port
 ```
 
-## What you're copying where
+If you just want to install Standable, use the normal `README.md` instructions instead. This guide is mainly for people who want to know exactly what is being copied and changed.
 
-| File | Goes to | What it is |
-|---|---|---|
-| `vendor/libdriver_ignition.so` | `$GAME/bin/linux64/driver_standable.so` | Linux driver SteamVR loads |
-| `vendor/ignition_server.exe` | `$GAME/bin/linux64/` | Windows half of the driver |
-| `vendor/ignition_bridge.dll` | `$GAME/bin/linux64/` | IPC bridge |
-| `vendor/steam_api64.dll` | `$GAME/bin/linux64/` and `$GAME/bin/win64/` | Steamworks runtime the driver DLL imports |
-| `build/vr_bootstrap.exe` | `$PFX/drive_c/` | Driver registration patch |
-| `build/vrpathreg2.exe` | prefix `SteamVR/bin/win64/vrpathreg.exe` and `vrmonitor.exe` | Existence-check shims |
-| vrclient DLLs | `$PFX/drive_c/vrclient/bin/` | From the Proton's wine tree |
+---
 
-`vendor/` is Ignition (MIT) built from upstream `6bb3c8a` plus both patches in
-`build/patches/`. `steam_api64.dll` is Valve's Steamworks SDK 1.60
-redistributable. Check the files:
+# 1. Set Your Paths
 
-```sh
-cd vendor && sha256sum -c SHA256SUMS
-```
+These are the paths used by the rest of this guide.
 
-SHA256SUMS pins the exact binaries we ship - a check, not provenance.
-`--build-from-source` compiles the same commit + patches, but the hashes are
-not byte-reproducible: the Windows `.exe` outputs embed a linker timestamp, so
-a local build matches `vendor/` in code but not in bytes. `sha256sum -c`
-verifies the shipped copies; don't read a rebuild's hash mismatch as tampering.
-None of this means the binaries are safe - read the patches or build your own.
-
-Upstream's
-[v1.0.0](https://github.com/BnuuySolutions/Ignition/releases/tag/v1.0.0)
-binaries won't match `vendor/SHA256SUMS`; ours carry the patches below.
-Ignition is MIT, so rebuilding and shipping them is fine.
-
-### The patches
-
-`ignition-server-registration-order.patch` - fixes random driver-load failures
-(`VRInitError_Init_InterfaceNotFound`, 105). `ignition_server.exe` starts its
-RPC listen thread before registering
-`RPCFunction_Get_ServerTrackedDeviceProvider`. The driver asks for that
-function as soon as it launches the server, so sometimes the server replies
-before it's registered, returns null, and the driver gives up (105) for the
-whole session. Register before listening. One file:
-`projects/ignition_server/main.cpp`.
-
-`ignition-rpc-timeout.patch` - puts timeouts on Ignition's RPC calls. Without
-it a call with no answer blocks for the full 60 s default and SteamVR's ~21 s
-watchdog aborts all of vrserver (the Safe-Mode loop). 4 files:
-
-- `rpc_core.cpp` / `rpc_core.h` - adds `CallMethodTimeout` (the default call
-  already waited 60 s)
-- `driver_ignition/driver.cpp` - bounds the driver's handshake call to 15 s,
-  so a dead server skips standable instead of hanging SteamVR's load_drivers
-  thread
-- `rpc_server_tracked_device_provider.cpp` - short timeouts for `Cleanup`
-  (4 s) and `RunFrame` (3 s) so a hung game DLL can't wedge SteamVR's shutdown
-
-Upstream added something similar later (`CallWithTimeout` + a 5 s time-sync,
-post-`6bb3c8a`) but only for time-sync; the driver handshake, `Cleanup` and
-`RunFrame` guards here are still the only ones covering the watchdogs. If
-upstream ever lands, keep those call sites (renamed) and drop the rest.
-
-To regenerate a patch:
-
-```sh
-git clone https://github.com/BnuuySolutions/Ignition.git
-cd Ignition
-git checkout 6bb3c8a
-# edit by hand, then:
-git diff > /path/to/standable-linux-port/build/patches/<name>.patch
-```
-
-### Build from source
-
-If you don't trust the vendored binaries, rebuild the three Ignition files.
-You need `cmake`, a C++ toolchain, `clang` with the Windows target for the
-PE binaries, and `winebuild` (wine dev tools).
-
-```sh
-git clone https://github.com/BnuuySolutions/Ignition.git
-cd Ignition
-git checkout 6bb3c8a   # the commit the shipped binaries are built from
-git apply /path/to/standable-linux-port/build/patches/ignition-rpc-timeout.patch
-git apply /path/to/standable-linux-port/build/patches/ignition-server-registration-order.patch
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-Copy the outputs into `vendor/` and use them in place of the shipped files:
-
-```sh
-cp build/Ignition-Linux-Windows/libdriver_ignition.so \
-   build/Ignition-Linux-Windows/ignition_server.exe \
-   build/Ignition-Linux-Windows/ignition_bridge.dll \
-   /path/to/standable-linux-port/vendor/
-```
-
-`steam_api64.dll` is Valve's Steamworks SDK 1.60 redistributable - download it
-from the [Steamworks SDK](https://partner.steamgames.com/doc/sdk) (or copy
-from any Steamworks game) if you want your own copy.
-
-## 0. Set your paths
+Change `PROTON` if you're using a different Proton build.
 
 ```sh
 STEAM_ROOT="$HOME/.local/share/Steam"
@@ -120,87 +41,161 @@ PFX="$COMPAT/pfx"
 PROTON="/usr/share/steam/compatibilitytools.d/proton-cachyos-slr/proton"
 ```
 
-`PROTON` must be the same build Steam uses for the game (right-click the game
-→ Properties → Compatibility). If they differ, the game and driver can't
-talk.
+`PROTON` must point to the **same Proton build selected for Standable in Steam**.
 
-## 1. Create the prefix (first time only)
+You can check it in:
 
-Proton keeps a per-game Windows environment in `$COMPAT`. Make it:
+**Standable → Properties → Compatibility**
+
+If the game and driver use different Proton builds, they cannot talk to each other.
+
+---
+
+# 2. Create the Proton Prefix
+
+Steam normally creates this automatically.
+
+If it doesn't exist yet:
 
 ```sh
 mkdir -p "$PFX"
-STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
-    "$PROTON" run cmd /c exit
+
+STEAM_COMPAT_DATA_PATH="$COMPAT" \
+STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
+"$PROTON" run cmd /c exit
 ```
 
-If this errors, launch the game once in Steam first so Steam creates the
-prefix, then re-run.
+If that fails, launch Standable once from Steam and try again.
 
-## 2. Copy prefix binaries
+---
 
-SteamVR's Windows pieces the game and driver look for inside Wine:
+# 3. Copy the SteamVR Files
+
+The driver needs a few SteamVR Windows files inside the Proton prefix.
 
 ```sh
 WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
+
 mkdir -p "$PFX/drive_c/vrclient/bin" "$WIN64"
+
 cp build/vr_bootstrap.exe "$PFX/drive_c/"
+
 cp build/vrpathreg2.exe "$WIN64/vrpathreg.exe"
 cp build/vrpathreg2.exe "$WIN64/vrmonitor.exe"
+
 PC="$(dirname "$PROTON")/files/lib/wine/x86_64-windows"
+
 cp "$PC"/vrclient*.dll "$PFX/drive_c/vrclient/bin/"
 ```
 
-`vr_bootstrap.exe` patches the driver's Windows-side registration at boot.
-`vrpathreg.exe` and `vrmonitor.exe` are shims the game's existence checks
-expect.
+These files do different jobs:
 
-## 3. Deploy the driver into the game folder
+| File               | Purpose                                        |
+| ------------------ | ---------------------------------------------- |
+| `vr_bootstrap.exe` | Patches the driver's Windows-side registration |
+| `vrpathreg.exe`    | Shim used by Standable's existence checks      |
+| `vrmonitor.exe`    | Shim used by Standable's existence checks      |
+| `vrclient*.dll`    | SteamVR client DLLs from your Proton build     |
 
-SteamVR loads `driver_standable.so` as a native Linux driver - it's Ignition's
-shim renamed. Its Windows server and bridge sit beside it:
+---
+
+# 4. Copy the Standable Driver
+
+Create the Linux driver directory:
 
 ```sh
 mkdir -p "$GAME/bin/linux64"
-cp vendor/libdriver_ignition.so "$GAME/bin/linux64/driver_standable.so"
-cp vendor/ignition_server.exe "$GAME/bin/linux64/"
-cp vendor/ignition_bridge.dll "$GAME/bin/linux64/"
-cp config/wine_psvr2_hidraw.reg "$GAME/bin/linux64/"
 ```
 
-`wine_psvr2_hidraw.reg` is imported at every driver boot for PSVR2 Sense
-controller support (the launch script runs `reg import` on it, so it must
-sit beside the scripts).
+Copy the driver files:
 
-## 4. steam_api64.dll (Steamworks runtime)
+```sh
+cp vendor/libdriver_ignition.so \
+   "$GAME/bin/linux64/driver_standable.so"
 
-The Windows driver (`driver_standable.dll`) imports `steam_api64.dll`. Wine
-resolves the import from the DLL's own directory, so it must sit in
-`bin/win64/`. Without it the driver fails to load and SteamVR aborts into
-Safe Mode after ~20 s.
+cp vendor/ignition_server.exe \
+   "$GAME/bin/linux64/"
+
+cp vendor/ignition_bridge.dll \
+   "$GAME/bin/linux64/"
+
+cp config/wine_psvr2_hidraw.reg \
+   "$GAME/bin/linux64/"
+```
+
+The important part is:
+
+```text
+bin/linux64/
+├── driver_standable.so
+├── ignition_server.exe
+├── ignition_bridge.dll
+└── wine_psvr2_hidraw.reg
+```
+
+`driver_standable.so` is the Linux driver SteamVR loads.
+
+The other files are used by the Windows side of the driver.
+
+`wine_psvr2_hidraw.reg` is imported at every driver boot for PSVR2 Sense controller support, so it must sit beside the launch scripts.
+
+---
+
+# 5. Copy `steam_api64.dll`
+
+The Windows driver needs Steamworks' `steam_api64.dll`.
+
+First check whether Standable already has one:
 
 ```sh
 SRC="$GAME/bin/win64/steam_api64.dll"
-[ -f "$SRC" ] || SRC=vendor/steam_api64.dll
+
+[ -f "$SRC" ] || SRC="vendor/steam_api64.dll"
+```
+
+The fallback is the copy bundled with this repository (Valve's Steamworks SDK 1.60 redistributable).
+
+Then copy it to both driver locations:
+
+```sh
 cp "$SRC" "$GAME/bin/linux64/"
 cp "$SRC" "$GAME/bin/win64/"
 ```
 
-## 5. SteamPath registry key
+You should now have:
 
-The game/driver under Wine need Steam's path registered:
-
-```sh
-STEAM_COMPAT_DATA_PATH="$COMPAT" STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
-    "$PROTON" run reg add 'HKCU\Software\Valve\Steam' /v SteamPath \
-    /t REG_SZ /d 'C:\Program Files (x86)\Steam' /f
+```text
+bin/linux64/steam_api64.dll
+bin/win64/steam_api64.dll
 ```
 
-## 6. `s:` drive link
+Wine resolves the import from the DLL's own directory, so the `bin/win64/` copy is the one the Windows driver actually loads. Without it, the driver cannot load correctly.
 
-The driver resolves game paths through the `s:` drive. Its target depends on
-the Proton build - newer Valve builds point it at the Steam root, older forks
-at `steamapps`:
+---
+
+# 6. Add the SteamPath Registry Entry
+
+The Windows side of the driver needs Steam's path registered inside the Proton prefix.
+
+Run:
+
+```sh
+STEAM_COMPAT_DATA_PATH="$COMPAT" \
+STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
+"$PROTON" run reg add 'HKCU\Software\Valve\Steam' \
+    /v SteamPath \
+    /t REG_SZ \
+    /d 'C:\Program Files (x86)\Steam' \
+    /f
+```
+
+---
+
+# 7. Create the `s:` Drive Link
+
+The driver uses the `s:` drive to resolve Steam paths.
+
+Different Proton builds use slightly different targets, so detect it from Proton:
 
 ```sh
 if grep -q get_validated_steamapps_parent "$(dirname "$PROTON")/proton"; then
@@ -208,201 +203,540 @@ if grep -q get_validated_steamapps_parent "$(dirname "$PROTON")/proton"; then
 else
     S_TARGET="$STEAM_ROOT/steamapps"
 fi
+
 ln -sfn "$S_TARGET" "$PFX/dosdevices/s:"
 ```
 
-Get this wrong and you get the "steamVR driver path not found" dialog on every
-boot. Note the dialog can also persist with a correct link: Proton rewrites
-the Windows-side `openvrpaths.vrpath` from the Linux copy on every launch,
-wiping Wine-side repairs, and the game checks it with a raw Win32 test a
-bare `/home/...` entry can never pass. Step 7's `S:\` seed entry is what
-satisfies that check.
+You can check the result with:
 
-## 7. Register the driver with SteamVR
+```sh
+ls -l "$PFX/dosdevices/s:"
+```
 
-SteamVR reads `~/.config/openvr/openvrpaths.vrpath`. Add the game folder to
-`external_drivers` twice: the Linux path (native driver load) and the
-current-Proton `S:\` form. Proton copies this file into the prefix on every
-launch and the game validates its driver path there with a raw Win32 check -
-a bare `/home/...` entry can never pass under Wine, so without the `S:\`
-entry you get the per-boot "driver path is missing" dialog (the driver
-itself still loads). Derive the `S:\` form from the game dir relative to
-`$S_TARGET` (step 6), keeping anything already there:
+If this points to the wrong place, Standable can show:
+
+> SteamVR driver path not found
+
+---
+
+# 8. Register Standable with SteamVR
+
+SteamVR gets its list of external drivers from:
+
+```text
+~/.config/openvr/openvrpaths.vrpath
+```
+
+The following adds both the normal Linux path and the Windows-style `S:\` path.
+
+It keeps existing drivers.
 
 ```sh
 python3 - "$GAME" "$S_TARGET" <<'PY'
-import json, os, sys
+import json
+import os
+import sys
+
 game, s_target = sys.argv[1], sys.argv[2]
+
 try:
     rel = os.path.relpath(game, s_target)
 except Exception:
     rel = None
+
 expected = None
 if rel and not rel.startswith('..'):
     expected = 'S:\\' + rel.replace('/', '\\')
+
 p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 os.makedirs(os.path.dirname(p), exist_ok=True)
+
 try:
-    d = json.load(open(p))
+    with open(p) as f:
+        d = json.load(f)
 except Exception:
     d = {"runtime": [], "version": 1}
-ed = [e for e in (d.get('external_drivers') or [])
-      if not ('Standable' in e and (e == game or ('\\' in e and e != expected)))]
-if game not in ed:
-    ed.insert(0, game)
-if expected and expected not in ed:
-    ed.insert(1 if game in ed else 0, expected)
-d['external_drivers'] = ed
-json.dump(d, open(p, 'w'), indent=2)
+
+external = d.get('external_drivers') or []
+
+# Remove old Standable entries.
+external = [
+    e for e in external
+    if not ('Standable' in e and (e == game or ('\\' in e and e != expected)))
+]
+
+if game not in external:
+    external.insert(0, game)
+
+if expected and expected not in external:
+    external.insert(1 if game in external else 0, expected)
+
+d['external_drivers'] = external
+
+with open(p, 'w') as f:
+    json.dump(d, f, indent=2)
 PY
 ```
 
-## 8. Seed the game's Windows-side openvrpaths
+The Linux path is used by SteamVR itself.
 
-The game runs under Wine and reads a different `openvrpaths.vrpath` inside the
-prefix. Point its runtime at SteamVR:
+The `S:\` entry is needed because Standable also checks the path from inside Wine.
+
+---
+
+# 9. Seed the Windows `openvrpaths.vrpath`
+
+The game has its own Windows-side copy inside the Proton prefix.
+
+Create it with SteamVR as the runtime:
 
 ```sh
 python3 - "$PFX" <<'PY'
-import json, os, sys
+import json
+import os
+import sys
+
 pfx = sys.argv[1]
-p = os.path.join(pfx, 'drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath')
+
+p = os.path.join(
+    pfx,
+    'drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath'
+)
+
 os.makedirs(os.path.dirname(p), exist_ok=True)
+
 try:
-    d = json.load(open(p))
+    with open(p) as f:
+        d = json.load(f)
 except Exception:
     d = {}
-runtime = [r for r in d.get('runtime', []) if 'vrclient' not in r.lower()]
+
+runtime = [
+    r for r in d.get('runtime', [])
+    if 'vrclient' not in r.lower()
+]
+
 steamvr = r'C:\Program Files (x86)\Steam\steamapps\common\SteamVR'
+
 if steamvr not in runtime:
     runtime.insert(0, steamvr)
+
 d['runtime'] = runtime
 d['version'] = 1
-json.dump(d, open(p, 'w'), indent=3)
+
+with open(p, 'w') as f:
+    json.dump(d, f, indent=3)
 PY
 ```
 
-## 9. Launch scripts
+This is separate from the Linux `openvrpaths.vrpath`.
 
-Two scripts keep the setup healthy at boot. Both are templates with
-`@PLACEHOLDERS@`; substitute your paths, then install them.
+---
 
-`launch_serverhelper.sh` - the driver calls this to start `ignition_server.exe`
-under Proton. It pins CWD to the driver dir (the server resolves its driver
-DLL against it), repairs the `s:` link, the VRChat link, SteamVR's safe-mode
-flags, kills stale foreign-Proton wineservers each boot, and supervises the
-server (respawn up to 20 times so one is alive for SteamVR's probes). Goes
-in `$GAME/bin/linux64/`. Shared bits live in sibling files sourced at boot:
-`proton_resolve.sh` (runtime Proton switching), `sweep.sh` (the wineserver
-sweep), `win_vrpath.sh` (Windows-side driver path repair), `python3` (the
-interpreter shim for the Sniper sandbox), `ignition.json` (server config).
+# 10. Install the Launch Scripts
 
-`standable_launch_hook.sh` - set as the game's Steam Launch Options. Runs the
-game in host context so the desktop settings window shows while SteamVR runs.
-Goes in `~/.local/bin/` (older installs used `~/bin/`, still supported).
+There are two main scripts involved:
 
-Generate each with sed (this is the substitution the installer does):
+### `launch_serverhelper.sh`
+
+This is started by the Linux SteamVR driver.
+
+It:
+
+* Starts `ignition_server.exe` through Proton
+* Keeps the server in the correct working directory
+* Repairs the `s:` link
+* Handles SteamVR Safe Mode flags
+* Cleans up stale Proton/Wine processes
+* Restarts the server if it dies
+
+It also sources three shared helper files placed beside it: `proton_resolve.sh` (runtime Proton switching), `sweep.sh` (the stale wineserver sweep) and `win_vrpath.sh` (Windows-side driver path repair).
+
+### `standable_launch_hook.sh`
+
+This is the Steam launch option.
+
+It starts Standable in host context so the normal desktop settings window can appear while SteamVR is running.
+
+The scripts are templates, so their paths need to be filled in first.
+
+Create the destination:
 
 ```sh
-vars=(-e "s|@GAME_DIR@|$GAME|g"
-      -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g"
-      -e "s|@PROTON@|$PROTON|g" -e "s|@STEAMVR@|$STEAM_ROOT/steamapps/common/SteamVR|g"
-      -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@S_ROOT@|$STEAM_ROOT|g"
-      -e "s|@S_TARGET@|$S_TARGET|g" -e "s|@APP_ID@|2370570|g"
-      -e "s|@HOME@|$HOME|g"
-      -e "s|@VRCHAT_VRC_DIR@|$STEAM_ROOT/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat|g")
-
-sed "${vars[@]}" templates/launch_serverhelper.sh.in > "$GAME/bin/linux64/launch_serverhelper.sh"
-sed "${vars[@]}" templates/proton_resolve.sh.in > "$GAME/bin/linux64/proton_resolve.sh"
-sed "${vars[@]}" templates/sweep.sh.in > "$GAME/bin/linux64/sweep.sh"
-sed "${vars[@]}" templates/win_vrpath.sh.in > "$GAME/bin/linux64/win_vrpath.sh"
-sed "${vars[@]}" templates/proton_python.sh.in > "$GAME/bin/linux64/python3"
-sed "${vars[@]}" templates/ignition.json.in > "$GAME/bin/linux64/ignition.json"
-sed "${vars[@]}" templates/standable_launch_hook.sh.in > "$HOME/.local/bin/standable_launch_hook.sh"
-
-chmod +x "$GAME/bin/linux64/launch_serverhelper.sh" \
-        "$GAME/bin/linux64/win_vrpath.sh" \
-        "$GAME/bin/linux64/python3" \
-        "$HOME/.local/bin/standable_launch_hook.sh"
+mkdir -p "$HOME/.local/bin"
 ```
 
-Then set the hook in Steam: right-click the game → Properties → Launch
-Options → `bash ~/.local/bin/standable_launch_hook.sh %command%`.
+Then substitute your paths:
 
-## 10. VRChat auto-calibration (optional)
+```sh
+vars=(
+  -e "s|@GAME_DIR@|$GAME|g"
+  -e "s|@COMPAT@|$COMPAT|g"
+  -e "s|@PFX@|$PFX|g"
+  -e "s|@PROTON@|$PROTON|g"
+  -e "s|@STEAMVR@|$STEAM_ROOT/steamapps/common/SteamVR|g"
+  -e "s|@STEAM_ROOT@|$STEAM_ROOT|g"
+  -e "s|@S_ROOT@|$STEAM_ROOT|g"
+  -e "s|@S_TARGET@|$S_TARGET|g"
+  -e "s|@APP_ID@|2370570|g"
+  -e "s|@HOME@|$HOME|g"
+  -e "s|@VRCHAT_VRC_DIR@|$STEAM_ROOT/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat|g"
+)
+```
 
-The driver reads VRChat's IK-debug log for auto-calibration. VRChat runs in
-its own prefix, so link its log folder into this one:
+Generate the scripts:
+
+```sh
+sed "${vars[@]}" templates/launch_serverhelper.sh.in \
+    > "$GAME/bin/linux64/launch_serverhelper.sh"
+
+sed "${vars[@]}" templates/proton_resolve.sh.in \
+    > "$GAME/bin/linux64/proton_resolve.sh"
+
+sed "${vars[@]}" templates/sweep.sh.in \
+    > "$GAME/bin/linux64/sweep.sh"
+
+sed "${vars[@]}" templates/win_vrpath.sh.in \
+    > "$GAME/bin/linux64/win_vrpath.sh"
+
+sed "${vars[@]}" templates/proton_python.sh.in \
+    > "$GAME/bin/linux64/python3"
+
+sed "${vars[@]}" templates/ignition.json.in \
+    > "$GAME/bin/linux64/ignition.json"
+
+sed "${vars[@]}" templates/standable_launch_hook.sh.in \
+    > "$HOME/.local/bin/standable_launch_hook.sh"
+```
+
+Make the required scripts executable:
+
+```sh
+chmod +x \
+    "$GAME/bin/linux64/launch_serverhelper.sh" \
+    "$GAME/bin/linux64/win_vrpath.sh" \
+    "$GAME/bin/linux64/python3" \
+    "$HOME/.local/bin/standable_launch_hook.sh"
+```
+
+The `python3` file is a shim: modern Proton launchers need Python 3.11 or newer, but SteamVR's runtime only ships 3.9, so the shim finds a working interpreter.
+
+---
+
+# 11. Add the Steam Launch Option
+
+In Steam:
+
+**Standable → Properties → General → Launch Options**
+
+Add:
+
+```text
+bash ~/.local/bin/standable_launch_hook.sh %command%
+```
+
+That's what makes the desktop settings window work normally.
+
+---
+
+# 12. Optional: VRChat Auto-Calibration
+
+Standable can read VRChat's IK debug log for auto-calibration.
+
+VRChat has its own Proton prefix, so link its log directory into Standable's prefix:
 
 ```sh
 mkdir -p "$PFX/drive_c/users/steamuser/AppData/LocalLow"
-ln -sfn "$STEAM_ROOT/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat" \
-       "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
+
+ln -sfn \
+    "$STEAM_ROOT/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat" \
+    "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
 ```
 
-Skip this if you don't use auto-calibration.
+Skip this if you don't use VRChat auto-calibration.
 
-## Launch
+---
+
+# 13. Start It
+
+That's the manual installation done.
 
 1. Start SteamVR.
-2. Launch the game from Steam.
-3. Desktop settings window appears while SteamVR runs (via the hook).
+2. Check that the Standable skeleton appears.
+3. Launch Standable from Steam.
+4. The desktop settings window should appear.
 
-## Uninstall (manual)
-
-Delete what you added, in reverse:
+If the driver doesn't appear in SteamVR, check the files first:
 
 ```sh
-rm -f "$GAME/bin/linux64/driver_standable.so" \
-      "$GAME/bin/linux64/ignition_server.exe" \
-      "$GAME/bin/linux64/ignition_bridge.dll" \
-      "$GAME/bin/linux64/launch_serverhelper.sh" \
-      "$GAME/bin/linux64/ignition.json" \
-      "$GAME/bin/linux64/wine_psvr2_hidraw.reg" \
-      "$GAME/bin/linux64/steam_api64.dll" \
-      "$GAME/bin/win64/steam_api64.dll" \
-      "$GAME/bin/linux64/python3" \
-      "$GAME/bin/linux64/proton_resolve.sh" \
-      "$GAME/bin/linux64/sweep.sh" \
-      "$GAME/bin/linux64/win_vrpath.sh" \
-      "$HOME/.local/bin/standable_launch_hook.sh" \
-      "$PFX/drive_c/vr_bootstrap.exe" \
-      "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe" \
-      "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe" \
-      "$PFX/drive_c/vrclient/bin/vrclient.dll" \
-      "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
+ls "$GAME/bin/linux64/"
+```
+
+Then check the SteamVR logs and the relevant files under:
+
+```text
+~/.local/state/standable/
+```
+
+---
+
+# Uninstall
+
+**Quit SteamVR before doing this.**
+
+Deleting the driver out from under a running SteamVR crashes it.
+
+Remove the files added by this guide:
+
+```sh
+rm -f \
+  "$GAME/bin/linux64/driver_standable.so" \
+  "$GAME/bin/linux64/ignition_server.exe" \
+  "$GAME/bin/linux64/ignition_bridge.dll" \
+  "$GAME/bin/linux64/launch_serverhelper.sh" \
+  "$GAME/bin/linux64/ignition.json" \
+  "$GAME/bin/linux64/wine_psvr2_hidraw.reg" \
+  "$GAME/bin/linux64/steam_api64.dll" \
+  "$GAME/bin/linux64/python3" \
+  "$GAME/bin/linux64/proton_resolve.sh" \
+  "$GAME/bin/linux64/sweep.sh" \
+  "$GAME/bin/linux64/win_vrpath.sh" \
+  "$GAME/bin/win64/steam_api64.dll" \
+  "$HOME/.local/bin/standable_launch_hook.sh" \
+  "$PFX/drive_c/vr_bootstrap.exe" \
+  "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe" \
+  "$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrmonitor.exe" \
+  "$PFX/drive_c/vrclient/bin/vrclient.dll" \
+  "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
+```
+
+Remove the `s:` link:
+
+```sh
 rm -f "$PFX/dosdevices/s:"
+```
+
+Remove the optional VRChat link if you created it:
+
+```sh
 rm -f "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
 ```
 
-Remove every Standable entry (Linux path and `S:\` form) from
-`external_drivers` in `~/.config/openvr/openvrpaths.vrpath`:
+### Remove the Standable SteamVR entries
+
+Open:
+
+```text
+~/.config/openvr/openvrpaths.vrpath
+```
+
+and remove the Standable entries from `external_drivers`.
+
+You can also do it with:
 
 ```sh
 python3 - <<'PY'
-import json, os
+import json
+import os
+
 p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
-d = json.load(open(p))
-d['external_drivers'] = [e for e in d.get('external_drivers') or []
-                         if 'Standable' not in e]
-json.dump(d, open(p, 'w'), indent=2)
+
+with open(p) as f:
+    d = json.load(f)
+
+d['external_drivers'] = [
+    e for e in d.get('external_drivers') or []
+    if 'Standable' not in e
+]
+
+with open(p, 'w') as f:
+    json.dump(d, f, indent=2)
 PY
 ```
 
-Delete the `SteamPath` value from `HKCU\Software\Valve\Steam` if you added
-it (step 5). Quit SteamVR first - deleting `driver_standable.so` out from
-under a running vrserver crashes it. Your original `steamvr.vrsettings` is
-kept at `steamvr.vrsettings.standable.bak` if the scripts modified it -
-restore it with `mv` to undo.
+### Remove the SteamPath registry entry
 
-## Why these files exist
+Only do this if you added it specifically for this patch:
 
-- `driver_standable.so` is a native Linux driver so SteamVR loads Standable's
-  Windows driver through the [Ignition](https://github.com/BnuuySolutions/Ignition)
-  bridge - Windows-only SteamVR drivers can't run directly on Linux.
-- `ignition_server.exe` runs under Proton and loads the game's real
-  `driver_standable.dll`, talking to the Linux shim over shared memory. That
-  link is what makes settings updates realtime.
-- The launch hook keeps the game and driver on the same Proton and same
-  prefix - a mismatch breaks their IPC, which is why switching Protons without
-  redoing this causes crashes.
+```sh
+STEAM_COMPAT_DATA_PATH="$COMPAT" \
+STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT" \
+"$PROTON" run reg delete 'HKCU\Software\Valve\Steam' \
+    /v SteamPath \
+    /f
+```
+
+If the launch scripts created a backup of your SteamVR settings:
+
+```text
+steamvr.vrsettings.standable.bak
+```
+
+restore it if needed.
+
+---
+
+# What's Actually Being Installed?
+
+For reference, these are all the files involved:
+
+| Source                         | Destination                               | Purpose                          |
+| ------------------------------ | ----------------------------------------- | -------------------------------- |
+| `vendor/libdriver_ignition.so` | `$GAME/bin/linux64/driver_standable.so`   | Linux SteamVR driver             |
+| `vendor/ignition_server.exe`   | `$GAME/bin/linux64/`                      | Windows driver server            |
+| `vendor/ignition_bridge.dll`   | `$GAME/bin/linux64/`                      | Linux/Windows IPC bridge         |
+| `vendor/steam_api64.dll`       | `$GAME/bin/linux64/` and `bin/win64/`     | Steamworks runtime               |
+| `build/vr_bootstrap.exe`       | `$PFX/drive_c/`                           | Driver registration              |
+| `build/vrpathreg2.exe`         | SteamVR `vrpathreg.exe` / `vrmonitor.exe` | Standable existence checks       |
+| Proton `vrclient*.dll`         | `$PFX/drive_c/vrclient/bin/`              | SteamVR client DLLs              |
+| `wine_psvr2_hidraw.reg`        | `$GAME/bin/linux64/`                      | PSVR2 Sense controller support   |
+| launch scripts                 | `$GAME/bin/linux64/`                      | Driver startup and maintenance   |
+| launch hook                    | `~/.local/bin/`                           | Starts Standable in host context |
+
+The game's original files are not replaced.
+
+---
+
+# Building Ignition Yourself
+
+The repository includes prebuilt Ignition binaries.
+
+If you would rather build them yourself, use the exact upstream commit and patches included here.
+
+You need:
+
+* `cmake`
+* A C++ toolchain
+* `clang` with the Windows target
+* `winebuild` / Wine development tools
+
+Clone Ignition:
+
+```sh
+git clone https://github.com/BnuuySolutions/Ignition.git
+cd Ignition
+git checkout 6bb3c8a
+```
+
+Apply the patches:
+
+```sh
+git apply /path/to/standable-linux-port/build/patches/ignition-rpc-timeout.patch
+git apply /path/to/standable-linux-port/build/patches/ignition-server-registration-order.patch
+```
+
+Build:
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Copy the resulting files:
+
+```sh
+cp \
+  build/Ignition-Linux-Windows/libdriver_ignition.so \
+  build/Ignition-Linux-Windows/ignition_server.exe \
+  build/Ignition-Linux-Windows/ignition_bridge.dll \
+  /path/to/standable-linux-port/vendor/
+```
+
+Your locally built files should match the shipped code, but **their SHA256 hashes will not necessarily match** the files in `vendor/`.
+
+The Windows executables contain a linker timestamp, so the builds are not byte-for-byte reproducible.
+
+`steam_api64.dll` is not built here; it is Valve's Steamworks SDK redistributable, copied from the game if present or from `vendor/`.
+
+---
+
+# Checking the Shipped Binaries
+
+The repository contains hashes for the exact binaries shipped in `vendor/`.
+
+Run:
+
+```sh
+cd vendor
+sha256sum -c SHA256SUMS
+```
+
+This verifies that the files match the copies shipped with this repository.
+
+It does **not** prove that the binaries are safe or that they came from a particular person or build system.
+
+If you want maximum trust, read the patches and build the binaries yourself.
+
+The shipped Ignition binaries are based on upstream commit `6bb3c8a` plus the two patches below. Upstream's own release binaries will not match `SHA256SUMS`; these carry the patches.
+
+---
+
+# The Ignition Patches
+
+### `ignition-server-registration-order.patch`
+
+Fixes intermittent:
+
+```text
+VRInitError_Init_InterfaceNotFound
+```
+
+The server previously started listening for RPC requests before registering the server's tracked-device-provider function.
+
+The driver can ask for that function immediately after starting the server. If the request arrives before registration, it gets a null response and the driver fails.
+
+The patch registers the function first.
+
+Affected file:
+
+```text
+projects/ignition_server/main.cpp
+```
+
+### `ignition-rpc-timeout.patch`
+
+Adds timeouts to Ignition RPC calls.
+
+Without these timeouts, an RPC call can wait up to the default 60 seconds. SteamVR's watchdog is much shorter, so a dead server can make SteamVR abort and enter Safe Mode.
+
+The patch adds:
+
+* `CallMethodTimeout` in `rpc_core.cpp` / `rpc_core.h`
+* A timeout on the driver's initial handshake
+* A timeout on `Cleanup`
+* A timeout on `RunFrame`
+
+The driver handshake is limited to 15 seconds.
+
+`Cleanup` is limited to 4 seconds.
+
+`RunFrame` is limited to 3 seconds.
+
+Upstream later added similar timeout functionality for time-sync, but the additional driver and shutdown call sites above are still needed for the failure modes this patch handles.
+
+---
+
+# Regenerating a Patch
+
+Start from the exact upstream commit:
+
+```sh
+git clone https://github.com/BnuuySolutions/Ignition.git
+cd Ignition
+git checkout 6bb3c8a
+```
+
+Make your changes, then:
+
+```sh
+git diff > /path/to/standable-linux-port/build/patches/my-change.patch
+```
+
+---
+
+# Credits
+
+* [Ignition](https://github.com/BnuuySolutions/Ignition) by Bnuuy Solutions, MIT
+* Standable Full Body Estimation by the Standable developers
+
+This project is unofficial and is not affiliated with or endorsed by Standable.
