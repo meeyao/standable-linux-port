@@ -955,6 +955,23 @@ PY
         if tail -n 400 "$LOG" | grep -aq "Watchdog timeout in thread Connection load_drivers"; then
             warn "SteamVR load_drivers watchdog abort (standable driver hung >21s). Check serverhelper.log; re-run ./standable install then restart SteamVR"
         fi
+        # The exact VRInitError_Init_InterfaceNotFound (105) signature: SteamVR
+        # loaded driver_standable.so, but the Ignition handshake never produced
+        # a provider, so HmdDriverFactory returned null. Two known causes: an
+        # old server binary (pre-registration-fix), or the helper's spawn guard
+        # matching a stale server from an earlier session with a different
+        # token (see the serverhelper.log check below). Either way every other
+        # check stays green through it, which is why users get stuck.
+        for _vlog in "$STEAM_ROOT/logs/vrserver.txt" "$STEAM_ROOT/logs/vrserver.previous.txt"; do
+            [ -f "$_vlog" ] || continue
+            if tail -n 600 "$_vlog" | grep -aq "Could not create interface in driver standable\|Unable to load driver standable because of error VRInitError_Init_InterfaceNotFound"; then
+                bad "driver handshake failed (VRInitError_Init_InterfaceNotFound, 105) - $(basename "$_vlog") shows SteamVR loaded the shim but the server never answered:"
+                tail -n 600 "$_vlog" | grep -a "Could not create interface in driver standable\|VRInitError_Init_InterfaceNotFound" | tail -3 | sed 's/^/        /'
+                warn "  if serverhelper.log shows 'spawn skipped' with no 'server exit': quit SteamVR, pkill -f ignition_server.exe, restart SteamVR"
+                warn "  otherwise an old ignition_server.exe: re-run ./standable install on testing/rc, then restart SteamVR"
+                break
+            fi
+        done
         # SteamVR error 307: "A key component of SteamVR isn't working" -
         # a vrcompositor/vulkan startup failure. Pull the smoking-gun lines.
         # NB: avoid matching "307" inside microsecond timestamps.
@@ -966,6 +983,25 @@ PY
             ok "no SteamVR 307 / compositor failure signature in vrserver.txt"
         fi
     fi
+    # launch_serverhelper's own log is where the server side of the handshake
+    # is visible. A run dominated by "spawn skipped" means the single-instance
+    # guard matched a server that doesn't belong to this session (different
+    # token) and never launched one for the current token - the driver then
+    # fails with 105 even though nothing crashed. (Fixed by scoping the guard
+    # to the token; stale logs still show the pattern.)
+    SLOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.log"
+    if [ -f "$SLOG" ]; then
+        _skips=$(tail -n 200 "$SLOG" 2>/dev/null | grep -c "spawn skipped")
+        _exits=$(tail -n 200 "$SLOG" 2>/dev/null | grep -c "server exit")
+        if [ "${_skips:-0}" -ge 30 ] && [ "${_exits:-0}" -eq 0 ]; then
+            bad "serverhelper.log: $_skips recent 'spawn skipped' and no server ever launched - a stale ignition_server.exe is treated as running, so this session never gets one (VRInitError 105). Kill leftover ignition_server.exe/wineserver, then restart SteamVR"
+        elif [ "${_skips:-0}" -ge 30 ]; then
+            warn "serverhelper.log: many recent 'spawn skipped' entries ($_skips) - stale servers from earlier sessions may be lingering"
+        else
+            ok "serverhelper.log: server launches not blocked by stale instances"
+        fi
+    fi
+    unset _skips _exits SLOG
     # --check always appends the full system dump to the log for sharing.
     {
             echo ""

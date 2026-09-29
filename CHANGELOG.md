@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Fixed a second cause of `VRInitError_Init_InterfaceNotFound` (105) on machines
+  that had switched Protons or SteamVR sessions: `launch_serverhelper.sh`'s
+  single-instance guard matched *any* `ignition_server.exe`, including a stale
+  one from an earlier session with a different connection token and a dead shm.
+  It then skipped spawning the real server on every attempt (reported log:
+  40/40 "spawn skipped" per boot), so the driver's handshake never got an
+  answer. The guard now matches this session's token (`$2`, already passed by
+  the driver) and excludes the helper's own argv. `./standable check` now flags
+  a serverhelper.log dominated by "spawn skipped" with no server launch.
+- `./standable check` now detects the exact `VRInitError_Init_InterfaceNotFound`
+  (105) signature in `vrserver.txt` / `vrserver.previous.txt` (`Could not create
+  interface in driver standable`), prints the offending lines, and points at the
+  fix. Previously every other check stayed green through this failure, so a
+  broken install reported clean while the driver was silently dropped each
+  boot.
 - Fixed the actual crash on a fresh install: `launch_serverhelper.sh` never
   launched the server, so the driver's `load_drivers` thread hung and SteamVR
   aborted after ~21 s (then Safe Mode / error 301, then the

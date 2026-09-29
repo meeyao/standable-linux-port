@@ -210,15 +210,19 @@ mkdir -p "$(dirname "$SERVER_LOG")"
 # ~2.5 min, which means SOMETHING is always running when SteamVR finally
 # probes. Falls back to a plain single run when another helper holds the
 # lock, so shim re-inits can't stack two supervisors or two servers.
-# Single-instance check for THE SERVER. The naive `pgrep ignition_server.exe`
-# also matches this helper's own argv (launch_serverhelper.sh .../ignition_
-# server.exe), so the guard must match the Proton/wine process tree only:
-#   python3 .../proton run  .../ignition_server.exe ...
-#   c:\windows\system32\steam.exe  .../ignition_server.exe ...
+# Single-instance check for THE SERVER, scoped to THIS session's connection
+# token ($2). A stale ignition_server.exe from an earlier SteamVR session has a
+# different token and a dead shm: it is inert, but a token-agnostic guard counts
+# it as "running" and then skips spawning the real server for the whole
+# 40-attempt window on every boot (observed on a Proton-switching machine:
+# 40/40 "spawn skipped" while SteamVR logged the 105 handshake failure, so the
+# driver never got an answer). Match the token instead, and exclude this
+# helper's own argv - it also carries "<server_exe> <token> ...".
 _server_running() {
-    proc_lines 'proton run .*ignition_server\.exe' 2>/dev/null | grep -q . && return 0
-    proc_lines 'steam\.exe .*ignition_server\.exe' 2>/dev/null | grep -q . && return 0
-    return 1
+    local tok="${2:-}"
+    [ -n "$tok" ] || return 1
+    proc_lines "ignition_server\\.exe[[:space:]]+${tok}([[:space:]]|$)" 2>/dev/null \
+        | grep -v "^$$ " | grep -q .
 }
 
 # Driver's current secret, for the game-launch hook (it reuses it to build the
@@ -261,7 +265,7 @@ for _attempt in $(seq 1 40); do
     # Single-instance guard: never run two servers in this prefix. If one
     # exists (another helper's spawn), wait it out instead of stacking.
     if _server_running; then
-        logh "spawn skipped, server already running (attempt $_attempt)"
+        logh "spawn skipped, server for token ${2:-?} already running (attempt $_attempt)"
         [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
         sleep 3
         continue
