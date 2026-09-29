@@ -2,8 +2,6 @@
 
 Run **Standable Full Body Estimation on Linux** using its Windows binaries through Proton.
 
-> **Use the `testing/rc` branch.** `main` is stale and does not have the latest fixes.
-
 This patch adds the Linux bits Standable needs without modifying or replacing the game's original files. It adds a few helper files in the game's `bin/linux64/` folder and places `steam_api64.dll` beside the Windows driver in `bin/win64/`, plus a SteamVR driver, desktop settings window support, realtime settings, and T-pose calibration.
 
 Some code was written with LLM assistance. It has been reviewed and tested, but skim it before relying on it, especially anything that kills processes or changes config files.
@@ -41,7 +39,7 @@ Some known-working versions are listed below.
 ### 3. Install the patch
 
 ```sh
-git clone -b testing/rc https://github.com/meeyao/standable-linux-port.git
+git clone https://github.com/meeyao/standable-linux-port.git
 cd standable-linux-port
 ./install.sh
 ```

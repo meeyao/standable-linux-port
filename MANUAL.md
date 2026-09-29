@@ -4,8 +4,6 @@ This is the manual version of the installer.
 
 You're copying the files into your Steam installation and Standable's Proton prefix yourself. No installer script is used.
 
-> **Use the `testing/rc` branch.** `main` is stale.
-
 ## Before You Start
 
 You need:
@@ -19,7 +17,7 @@ You need:
 Get the repository:
 
 ```sh
-git clone -b testing/rc https://github.com/meeyao/standable-linux-port.git
+git clone https://github.com/meeyao/standable-linux-port.git
 cd standable-linux-port
 ```
 

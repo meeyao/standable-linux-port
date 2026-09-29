@@ -63,8 +63,6 @@
 
 First major release.
 
-> `testing/rc` is the maintained branch.
-
 * Removed the old `./standable gui` command and desktop entry. Use the Steam
   launch hook instead.
 * The launch hook now clears SteamVR Safe Mode block markers when the game
