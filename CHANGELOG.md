@@ -2,156 +2,123 @@
 
 ## Unreleased
 
-- Fixed the actual crash on a fresh install: `launch_serverhelper.sh` never
-  launched the server, so the driver's `load_drivers` thread hung and SteamVR
-  aborted after ~21 s (then Safe Mode / error 301, then the
-  `blocked_by_safe_mode` loop). SteamVR loads the driver inside the Steam
-  Linux Runtime (Sniper) sandbox, which ships **no `ps` and no `pgrep`**. The
-  helper read its parent PID with `ps -o ppid= -p $$` (empty in the sandbox,
-  so the supervision loop's liveness check `[ -d /proc/$_seppid ]` broke
-  immediately) and used `pgrep` for the server single-instance guard and the
-  stale-wineserver sweep. It now uses bash's `$PPID` and a pure-bash
-  `/proc/<pid>/cmdline` scan (`proc_lines()`, in `sweep.sh`, shared with the
-  hook). No `server.out` was ever written because the launch line was never
-  reached. Reproduced and fixed on a clean testing/rc install: the helper now
-  launches the server and SteamVR loads the driver instead of aborting.
-- Bound the driver's handshake call to 15 s. It waited the full 60 s default,
-  so a server that never answered hung SteamVR's `load_drivers` thread past
-  its ~21 s watchdog, aborting all of vrserver and landing in the Safe-Mode /
-  error-301 loop. A dead server now skips standable instead.
-- `./standable check` flags the `load_drivers` watchdog abort instead of
-  reporting vrserver.txt clean.
-- Fixed random driver-load failures (`VRInitError_Init_InterfaceNotFound`,
-  105) that dropped standable for the session, mostly on cold or loaded boots.
-  Upstream Ignition bug: `ignition_server.exe` starts listening before it
-  registers the function the driver asks for, so the driver sometimes gets
-  null back. Server now registers first
-  (`build/patches/ignition-server-registration-order.patch`). Reproduced on a
-  cold boot at load 18.6, which used to fail every time.
-- `launch_serverhelper.sh`: stop deleting the driver's `ignition_ipc_*` shm
-  (broke the handshake), take the lock before the foreign-wineserver sweep so a
-  duplicate helper can't kill the active server, launch via Proton's `wine`
-  binary directly, defer the PSVR2 reg import past the handshake, and keep a
-  server alive through the driver's retry window.
-- `--build-from-source` pins Ignition to `6bb3c8a` instead of tracking
-  `origin/HEAD`. The patches are written against that commit and the build
-  matches `vendor/` in code, not byte-for-byte (the `.exe` outputs embed a
-  linker timestamp); the branch tip matched neither.
-- MANUAL: `vendor/SHA256SUMS` pins the shipped bytes, not provenance, and a
-  rebuild isn't byte-identical (`sha256sum -c` is for the vendored copies).
+### Fixes
 
-- The installer seeds the current-Proton `S:\` game path into Linux
-  `~/.config/openvr/openvrpaths.vrpath` next to the Linux path. Proton
-  copies that file into the prefix on every launch and the game validates
-  its driver path there with a raw Win32 check, which a bare `/home/...`
-  entry can never pass under Wine - hence the per-boot "driver path is
-  missing"   dialog (the driver itself always loaded fine). Verified by
-  diffing the Windows-side file before/after the game's own Fix It button,
-  which writes exactly the seeded form. `./standable check` verifies the
-  seed entry.
-- `launch_serverhelper.sh` pins CWD to the driver directory before starting
-  the server. `ignition_server` resolves its `driver_dll`
-  (`../win64/driver_standable.dll`) against CWD, so inheriting vrserver's
-  boot-dependent CWD made driver load a coin flip: it worked when vrserver
-  happened to boot with a compatible CWD and failed with silent exit 1
-  (vrserver 105s, no driver) otherwise. Proven with loader traces showing
-  the miss (`.../common/win64/...`) vs the hit (`.../bin/win64/...`).
-- The stale-wineserver sweep lived as three copies (hook, driver shim,
-  installer) and had already drifted once. Hook and shim now source one
-  shared `sweep.sh` (same pgrep-based scan, same fail-closed prefix guard);
-  the installer's wider install-time sweep stays separate by design.
-- `--uninstall` actually uninstalls now: it removes the driver shim, server,
-  bridge, launch scripts, shims, vrclient copies and `.bak` files (leaving
-  the game's own files alone), strips both vrpath seed entries, deletes the
-  `SteamPath` registry value with verification, and refuses while SteamVR
-  runs (deleting a loaded driver crashes it). Previously it left the driver
-  installed and working. Also dry-run safe (it wasn't - `rm`/`mv` executed).
+* Fixed another cause of `VRInitError_Init_InterfaceNotFound` (105) after
+  switching Proton or restarting SteamVR. A stale `ignition_server.exe` could
+  stop the new server from starting. The helper now only matches the current
+  session.
+* `./standable check` now detects the actual SteamVR 105 error instead of
+  reporting everything as OK.
+* Fixed a fresh-install crash where SteamVR's Sniper runtime could not run the
+  helper because it doesn't include `ps` or `pgrep`. The helper now uses
+  `$PPID` and `/proc` directly.
+* Fixed a driver startup hang caused by an unanswered Ignition handshake.
+  The handshake now times out after 15 seconds instead of waiting 60 seconds
+  and taking down SteamVR's `load_drivers` thread.
+* `./standable check` now detects the SteamVR `load_drivers` watchdog crash.
+* Fixed intermittent driver loading failures caused by Ignition registering
+  its RPC function after starting its listener. The registration now happens
+  first.
+* Fixed the server helper deleting the driver's `ignition_ipc_*` shared-memory
+  files. This could break the handshake.
+* Fixed duplicate helpers killing the active server during the stale-process
+  cleanup.
+* The server is now started directly through Proton's Wine binary.
+* The PSVR2 registry import is delayed until after the driver handshake.
+* The server stays alive through SteamVR's retry window.
+* The server helper now starts from the driver directory. This fixes cases
+  where Ignition looked for the Windows driver DLL in the wrong directory.
+* Added Standable's `S:\` path to `openvrpaths.vrpath`. This fixes
+  the recurring "SteamVR driver path is missing" dialog.
+* `./standable check` now verifies the `S:\` path entry.
+* The stale-wineserver scan is now shared by the driver helper and launch hook,
+  instead of having separate copies that could get out of sync.
+* `--uninstall` now actually removes the files and settings added by the
+  installer. It also refuses to run while SteamVR is running.
+* Fixed `--dry-run` accidentally running file operations.
+* `--build-from-source` now builds against the pinned Ignition commit
+  `6bb3c8a`, matching the source used for the shipped binaries.
+
+### Diagnostics
+
+* `./standable check` now reports when the server helper is repeatedly skipping
+  launches without ever starting a server.
+* `./standable check` now shows the relevant lines from SteamVR's
+  `vrserver.txt` when it finds the 105 error.
+* Failed launches now actually leave a `server.out` behind. Previously the
+  helper never reached the launch line, so it left no trace at all.
+
+### Manual install
+
+* `vendor/SHA256SUMS` now clearly documents that the hashes verify the shipped
+  binaries, not their provenance.
+* Documented why locally rebuilt Windows binaries don't have the same hashes as
+  the vendored copies.
+* Pinned the documented Ignition source and patches to `6bb3c8a`.
+
+---
 
 ## v1.0.0
 
-First major release. testing/rc is the maintained branch.
+First major release.
 
-- The old `./standable gui` command and the "Standable GUI" desktop entry are
-  gone. The launch hook replaces them: set it in Steam Launch Options, then
-  launch through Steam. Without the hook the game still runs, the settings
-  window just shows in VR only.
-- A SteamVR crash left the driver "blocked by a previous safe mode event" on
-  the next boot, and only a re-install cleared it. The launch hook now clears
-  the block markers on every game launch, and `./standable check` reports
-  them instead of failing silently.
-- The wineserver sweep read /proc environ for every wine-ish process on the
-  box, ~5 s per launch on a loaded machine. SteamVR probes a driver twice
-  (~8 s apart) and drops it with VRInitError 105 when the server hasn't
-  handshook yet, so those seconds decided boot success by luck (the
-  intermittent "driver won't load even though nothing crashed"). The sweep
-  now scans candidates with one pgrep shot.
-- `ignition_server` output is captured to `~/.local/state/standable/server.out`;
-  an instant exit-0 left no trace at all before.
-- Timestamped backups are pruned to the newest 2 per file; installs stacked
-  dozens of .bak files in bin/linux64.
-- SteamVR safe-mode no longer hard-blocks standable across sessions. The
-  launch script now clears the full block (`driver_standable.blocked_by_safe_mode`
-  in `steamvr.vrsettings` and the `vrserver_crash_timestamp.txt` file) before
-  each boot, not just `enable`/`enableSafeMode`.
-- The driver and launch hook resolve the Proton build at runtime via a shared
-  `proton_resolve.sh`. They prefer the prefix's own bookkeeping (`config_info`),
-  then Steam's forced compat tool (`config.vdf`), then the install-time
-  fallback. After switching Proton in Steam's UI, re-run `./install.sh` so
-  stale Wine processes from the old build are cleared.
-- `clear_stale_services` / `clear_foreign_wineservers` kill the previous
-  build's leftover wineserver so a Proton switch doesn't leave the app
-  un-launchable. Scoped to the game's own prefix via `/proc` environ, so
-  unrelated games are left alone. Also sweeps the orphaned
-  `steam.exe`/`ignition_server.exe` tree left when SteamVR force-aborts
-  shutdown.
-- The launch hook now runs the game in host context (`$PROTON run`) instead of
-  chaining Steam's `%command%`. Chaining registered the app as a
-  `steam.overlay` client that SteamVR dropped immediately. Direct run keeps the
-  desktop GUI window while SteamVR runs.
-- `steam_api64.dll` is deployed to `bin/win64/` as well as `bin/linux64/`.
-  The Windows driver imports it from its own directory, so without a copy
-  beside it the driver failed to load and SteamVR aborted after a ~21 s
-  watchdog timeout.
-- Proton crashed on startup under SteamVR's Sniper sandbox because its launcher
-  needs Python >= 3.11 (`from typing import Self`) but Sniper only ships 3.9.
-  The installer now deploys a `python3` shim that uses a capable host python or
-  the Steam Linux Runtime 4.0 python3.13.
-- `win_vrpath.sh` (run on every driver/game boot) keeps exactly the current
-  Proton's `S:\` entry in the game's Windows-side `openvrpaths.vrpath` and drops
-  stale `S:\` variants and Linux paths. Does not stop the game's per-boot
-  "steamVR driver path is missing" dialog - the game rewrites that file itself.
-- The `load_drivers` watchdog crash (issue #1, "steamvr error 301") was a
-  leftover wineserver from a previous Proton holding the prefix; the
-  install-time `clear_stale_services` sweep clears it. The Ignition source
-  patch (`build/patches/ignition-rpc-timeout.patch`) bounds RPC calls so a
-  stalled game driver can't wedge SteamVR's shutdown watchdog either.
+* Removed the old `./standable gui` command and desktop entry. Use the Steam
+  launch hook instead.
+* The launch hook now clears SteamVR Safe Mode block markers when Standable
+  starts.
+* `./standable check` reports Safe Mode block markers.
+* Made the wineserver cleanup much faster by avoiding a full `/proc` environment
+  scan for every Wine process.
+* Added `server.out` logging for `ignition_server.exe`.
+* Old `.bak` files are now cleaned up, keeping only the newest two per file.
+* SteamVR Safe Mode blocks are cleared properly between sessions.
+* Proton is resolved at runtime, using the prefix and Steam's configured Proton
+  before falling back to the install-time version.
+* Switching Proton now cleans up leftover processes from the previous build.
+* Cleanup is limited to the Standable prefix so other games are left alone.
+* The launch hook now runs Standable directly through Proton instead of chaining
+  Steam's `%command%`.
+* `steam_api64.dll` is now installed beside the Windows driver in both
+  `bin/win64/` and `bin/linux64/`.
+* Added a Python 3 shim for SteamVR's Sniper runtime. This fixes Proton launchers
+  that require a newer Python version.
+* Added `win_vrpath.sh` to keep the Windows-side driver path in sync with the
+  currently selected Proton.
+* Fixed the SteamVR error 301 / `load_drivers` crash caused by leftover
+  wineservers.
+* Added the RPC timeout mechanism so a stuck driver cannot hang SteamVR
+  indefinitely. The driver handshake and shutdown call sites were added later
+  (see Unreleased).
+
+---
 
 ## v0.1.2
 
-- Install on any Steam library: the installer finds the game via
-  `libraryfolders.vdf`, derives the prefix from that drive's
-  `steamapps/compatdata/<APP_ID>`, and points `s:` at the correct library.
+* Standable can now be installed on any Steam library drive.
+* The installer finds Standable through Steam's `libraryfolders.vdf` instead of
+  assuming the default Steam library.
+
+---
 
 ## v0.1.1
 
-- Fresh-install SteamVR crash fixed: `driver_standable.dll` needs
-  `steam_api64.dll` (Steamworks runtime), which SteamVR doesn't provide. The
-  installer now vendors and deploys it.
-- `./standable check` verifies `steam_api64.dll` is deployed.
-- `vendor/steam_api64.dll` added to `SHA256SUMS`; origin documented in
-  `MANUAL.md`.
+* Fixed fresh-install SteamVR crashes caused by the missing
+  `steam_api64.dll` Steamworks runtime.
+* `./standable check` now verifies that `steam_api64.dll` is installed.
+* Added `steam_api64.dll` to `vendor/SHA256SUMS`.
+* Documented the source of the Steamworks DLL in `MANUAL.md`.
+
+---
 
 ## v0.1.0
 
-- Ignition is vendored; the installer deploys `libdriver_ignition.so` and
-  `ignition_server.exe` from this repo, no manual Ignition install step.
-- Launch scripts detect the Proton `s:` convention (steamapps vs Steam parent
-  dir) and adopt it automatically.
-- Both launch scripts watch `s:` and recreate it if Proton's prefix
-  maintenance deletes it (60 s after launch).
-- `./standable` CLI is the single entry point (`install`, `check`,
-  `uninstall`).
-- Flatpak Steam gives a clear error instead of failing silently.
-- Install-time glibc check warns if the shipped `.so` won't load.
-- `vendor/SHA256SUMS` and `MANUAL.md` document upstream hashes and how to
-  build from source.
+* Added the `Ignition` binaries directly to the project, so installing no
+  longer requires a separate Ignition install.
+* The installer detects which `s:` path convention the selected Proton uses.
+* The launch scripts recreate the `s:` link if Proton removes it.
+* Added the `./standable` command with `install`, `check`, and `uninstall`.
+* Added a clear error for Flatpak Steam.
+* Added a glibc compatibility check for the Linux driver.
+* Added `vendor/SHA256SUMS`.
+* Added `MANUAL.md` with manual installation and build instructions.
