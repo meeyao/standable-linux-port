@@ -29,7 +29,7 @@
 * The server stays alive through SteamVR's retry window.
 * The server helper now starts from the driver directory. This fixes cases
   where Ignition looked for the Windows driver DLL in the wrong directory.
-* Added the current Proton's `S:\` game path to `openvrpaths.vrpath`. This fixes
+* Added Standable's `S:\` path to `openvrpaths.vrpath`. This fixes
   the recurring "SteamVR driver path is missing" dialog.
 * `./standable check` now verifies the `S:\` path entry.
 * The stale-wineserver scan is now shared by the driver helper and launch hook,
@@ -65,7 +65,7 @@ First major release.
 
 * Removed the old `./standable gui` command and desktop entry. Use the Steam
   launch hook instead.
-* The launch hook now clears SteamVR Safe Mode block markers when the game
+* The launch hook now clears SteamVR Safe Mode block markers when Standable
   starts.
 * `./standable check` reports Safe Mode block markers.
 * Made the wineserver cleanup much faster by avoiding a full `/proc` environment
@@ -87,7 +87,7 @@ First major release.
   currently selected Proton.
 * Fixed the SteamVR error 301 / `load_drivers` crash caused by leftover
   wineservers.
-* Added the RPC timeout mechanism so a stuck game driver cannot hang SteamVR
+* Added the RPC timeout mechanism so a stuck driver cannot hang SteamVR
   indefinitely. The driver handshake and shutdown call sites were added later
   (see Unreleased).
 
@@ -96,7 +96,7 @@ First major release.
 ## v0.1.2
 
 * Standable can now be installed on any Steam library drive.
-* The installer finds the game through Steam's `libraryfolders.vdf` instead of
+* The installer finds Standable through Steam's `libraryfolders.vdf` instead of
   assuming the default Steam library.
 
 ---

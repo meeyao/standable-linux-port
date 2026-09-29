@@ -45,7 +45,7 @@ You can check it in:
 
 **Standable → Properties → Compatibility**
 
-If the game and driver use different Proton builds, they cannot talk to each other.
+If Standable and the driver use different Proton builds, they cannot talk to each other.
 
 ---
 
@@ -284,7 +284,7 @@ The `S:\` entry is needed because Standable also checks the path from inside Win
 
 # 9. Seed the Windows `openvrpaths.vrpath`
 
-The game has its own Windows-side copy inside the Proton prefix.
+Standable has its own Windows-side copy inside the Proton prefix.
 
 Create it with SteamVR as the runtime:
 
@@ -591,7 +591,7 @@ For reference, these are all the files involved:
 | launch scripts                 | `$GAME/bin/linux64/`                      | Driver startup and maintenance   |
 | launch hook                    | `~/.local/bin/`                           | Starts Standable in host context |
 
-The game's original files are not replaced.
+Standable's original files are not replaced.
 
 ---
 
@@ -644,7 +644,7 @@ Your locally built files should match the shipped code, but **their SHA256 hashe
 
 The Windows executables contain a linker timestamp, so the builds are not byte-for-byte reproducible.
 
-`steam_api64.dll` is not built here; it is Valve's Steamworks SDK redistributable, copied from the game if present or from `vendor/`.
+`steam_api64.dll` is not built here; it is Valve's Steamworks SDK redistributable, copied from Standable if present or from `vendor/`.
 
 ---
 

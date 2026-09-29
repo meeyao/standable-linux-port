@@ -2,7 +2,7 @@
 
 Run **Standable Full Body Estimation on Linux** using its Windows binaries through Proton.
 
-This patch adds the Linux bits Standable needs without modifying or replacing the game's original files. It adds a few helper files in the game's `bin/linux64/` folder and places `steam_api64.dll` beside the Windows driver in `bin/win64/`, plus a SteamVR driver, desktop settings window support, realtime settings, and T-pose calibration.
+This patch adds the Linux bits Standable needs without modifying or replacing Standable's original files. It adds a few helper files in Standable's `bin/linux64/` folder and places `steam_api64.dll` beside the Windows driver in `bin/win64/`, plus a SteamVR driver, desktop settings window support, realtime settings, and T-pose calibration.
 
 Some code was written with LLM assistance. It has been reviewed and tested, but skim it before relying on it, especially anything that kills processes or changes config files.
 
@@ -64,13 +64,13 @@ Add:
 bash ~/.local/bin/standable_launch_hook.sh %command%
 ```
 
-This runs the game in the host environment, so its desktop settings window works while SteamVR is running and the game and driver stay on one shared Proton prefix.
+This runs Standable in the host environment, so its desktop settings window works while SteamVR is running and Standable and the driver stay on one shared Proton prefix.
 
 ### 5. Start SteamVR
 
 Start SteamVR **before** launching Standable.
 
-The Standable skeleton/trackers should appear in SteamVR even before the game is running.
+The Standable trackers should appear in SteamVR as soon as it starts, before you launch the Standable app.
 
 If they don't:
 
@@ -114,7 +114,7 @@ AppID:
 2370570
 ```
 
-The installer finds the game even if it is installed on another library drive.
+The installer finds Standable even if it is installed on another library drive.
 
 ### Proton
 
@@ -344,7 +344,7 @@ If Standable or the driver fails to start, also attach:
 
 You only need to do this if you want to change Proton.
 
-The **game and driver must use the same Proton**.
+**Standable and the driver must use the same Proton**.
 
 ### 1. Change Proton in Steam
 
@@ -384,7 +384,7 @@ Logs are stored here:
 | `serverhelper.log`  | Driver/server launches and Proton information           |
 | `server.out`        | Standable/driver server output                          |
 | `proton-server.log` | Proton startup output for the driver server             |
-| `hook.log`          | Game launches through the launch hook                   |
+| `hook.log`          | Standable launches through the launch hook              |
 | `game.log`          | Standable's own output                                  |
 
 For a bug report, start with:
@@ -433,9 +433,9 @@ ignition_server.exe
 
 using Proton.
 
-The launch hook starts the game in the host environment so its desktop settings window can appear normally while SteamVR is running.
+The launch hook starts Standable in the host environment so its desktop settings window can appear normally while SteamVR is running.
 
-The game and driver use the same Proton prefix and communicate through shared memory, which is what allows settings to update in realtime.
+Standable and the driver use the same Proton prefix and communicate through shared memory, which is what allows settings to update in realtime.
 
 The installer also handles two annoying Linux/Proton problems:
 
