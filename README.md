@@ -197,28 +197,31 @@ and restart SteamVR.
 
 ### VRInitError_Init_InterfaceNotFound (105)
 
-SteamVR loaded the driver but its server never answered.
+SteamVR loaded the driver but its server never answered. Known causes:
 
-This usually means a stale server from an earlier session is blocking the helper:
+**A stub `steam_api64.dll`.** Standable ships a 4 KB placeholder in
+`bin/win64/`; if the installer picked it up instead of the real ~300 KB
+Steamworks DLL, the Windows driver can't load. `./standable check` reports it
+as a stub. Run `./standable install` to replace it.
 
-1. Fully quit SteamVR.
-2. Run:
+**A stale server from an earlier session** blocking the helper:
 
 ```sh
 pkill -f ignition_server.exe
 ```
 
-3. Start SteamVR again.
+Then start SteamVR again.
 
-If it still happens, run:
+Either way, `./standable install` then a SteamVR restart resolves it, and
+`./standable check` flags the cause automatically.
 
-```sh
-./standable install
-```
+### SteamVR enters Safe Mode and won't load the driver again
 
-Then restart SteamVR.
-
-`./standable check` flags this error automatically.
+After a crash SteamVR records `blocked_by_safe_mode` for the driver and keeps
+refusing to load it - even when `enableSafeMode` is off. `./standable install`
+(or the launch hook) clears the marker and the crash-timestamp file. If you're
+stuck in a loop where enabling the add-on crashes SteamVR immediately, check
+for a stub `steam_api64.dll` (above) before re-enabling.
 
 ### SteamVR crashes or enters Safe Mode after ~20 seconds
 
