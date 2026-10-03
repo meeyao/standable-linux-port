@@ -301,17 +301,36 @@ resolve_reg() {
     [ -f "$IGN_PSVR2_REG" ] || die "wine_psvr2_hidraw.reg missing ($IGN_PSVR2_REG)"
 }
 
+# steam_api64_ok - is this a usable Steamworks runtime? The real DLL is a few
+# hundred KB; Standable ships a tiny (4 KB) stub in bin/win64/. Copying that
+# stub over the real one makes ignition_server.exe fail to load the Windows
+# driver, so the handshake never completes and SteamVR aborts with a ~21 s
+# watchdog timeout / 105 / safe-mode loop. Size is the cheap discriminator
+# (>=100 KB); the PE header is a second sanity check. The vendored SDK 1.60
+# copy is the SHA-256 1add7f15... documented below.
+steam_api64_ok() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -ge 100000 ] || return 1
+    [ "$(head -c 2 "$f" 2>/dev/null)" = "MZ" ] || return 1
+    return 0
+}
+
 # resolve_steam_api64 - pick the source for steam_api64.dll (the driver's
-# Steamworks runtime). Use the game's own build if it ships one, else the
-# vendored copy - which is the Steamworks SDK 1.60 redistributable (SHA-256
+# Steamworks runtime). Prefer the game's own build, but only if it's a real
+# DLL - a stub there must not shadow the vendored copy. The vendored copy is
+# the Steamworks SDK 1.60 redistributable (SHA-256
 # 1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc), same file
 # every Steamworks game ships. No runtime download needed.
 SA64_SRC=""
 resolve_steam_api64() {
-    if [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
+    if steam_api64_ok "$GAME_DIR/bin/win64/steam_api64.dll"; then
         SA64_SRC="$GAME_DIR/bin/win64/steam_api64.dll"
         say "using game's own steam_api64.dll"
     else
+        if [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
+            warn "game's bin/win64/steam_api64.dll is a stub ($(stat -c %s "$GAME_DIR/bin/win64/steam_api64.dll" 2>/dev/null) bytes) - using vendor copy"
+        fi
         SA64_SRC="$REPO/vendor/steam_api64.dll"
     fi
     [ -f "$SA64_SRC" ] || die "steam_api64.dll source missing ($SA64_SRC)"
@@ -743,9 +762,17 @@ PY
         bad "Steam launch hook missing"
     fi
     if [ "$GAME_FOUND" = 1 ]; then
-        [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] && [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ] \
-            && ok "steam_api64.dll deployed (driver's Steamworks dep, linux64+win64)" \
-            || bad "steam_api64.dll missing - re-run install, SteamVR crashes on driver load"
+        # Must be a real DLL in BOTH places, not just present: Standable ships
+        # a 4 KB stub in bin/win64/, and a stub copied over the real runtime
+        # makes the Windows driver fail to load (105 -> ~21 s watchdog abort
+        # -> safe-mode block loop). Detect it here instead of at SteamVR boot.
+        if steam_api64_ok "$GAME_DIR/bin/linux64/steam_api64.dll" && steam_api64_ok "$GAME_DIR/bin/win64/steam_api64.dll"; then
+            ok "steam_api64.dll deployed (driver's Steamworks dep, linux64+win64)"
+        elif [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] && [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
+            bad "steam_api64.dll is a stub ($(stat -c %s "$GAME_DIR/bin/win64/steam_api64.dll" 2>/dev/null) bytes), not the real SDK - driver can't load (105). Re-run ./standable install"
+        else
+            bad "steam_api64.dll missing - re-run install, SteamVR crashes on driver load"
+        fi
         if [ -x "$GAME_DIR/bin/linux64/python3" ]; then
             # Actually exercise the shim: Proton dies on startup if it can't
             # resolve a python with typing.Self (Sniper sandbox ships 3.9).

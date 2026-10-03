@@ -4,6 +4,12 @@
 
 ### Fixes
 
+* Fixed the installer copying a stub `steam_api64.dll` over the real
+  Steamworks runtime. Standable ships a 4 KB placeholder in `bin/win64/`, and
+  `resolve_steam_api64` trusted any file there, so the Windows driver failed to
+  load and SteamVR went into the 105 / ~21 s watchdog abort / safe-mode block
+  loop. The source is now validated (size + PE header) and falls back to the
+  vendored copy; `./standable check` reports a stub instead of "deployed".
 * Fixed another cause of `VRInitError_Init_InterfaceNotFound` (105) after
   switching Proton or restarting SteamVR. A stale `ignition_server.exe` could
   stop the new server from starting. The helper now only matches the current
