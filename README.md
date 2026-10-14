@@ -219,7 +219,7 @@ Either way, `./standable install` then a SteamVR restart resolves it, and
 
 After a crash SteamVR records `blocked_by_safe_mode` for the driver and keeps
 refusing to load it - even when `enableSafeMode` is off. `./standable install`
-(or the launch hook) clears the marker and the crash-timestamp file. If you're
+(with SteamVR closed) clears the marker and the crash-timestamp file. If you're
 stuck in a loop where enabling the add-on crashes SteamVR immediately, check
 for a stub `steam_api64.dll` (above) before re-enabling.
 
@@ -234,6 +234,13 @@ Run:
 Then restart SteamVR.
 
 This usually means an old Proton/Wine process is still holding the Standable prefix.
+
+### SteamVR crashes on boot with the Steam Link (`vrlink`) driver
+
+If SteamVR dies a few seconds after boot, or the moment you enable an add-on,
+and the crash dump names `driver_vrlink.so`, connect the headset's Steam Link
+session **before** launching SteamVR. Valve's `vrlink` driver crashes on the
+"Disconnected VRLink Headset" path; it is not caused by Standable.
 
 ### SteamVR says the driver was blocked by Safe Mode
 

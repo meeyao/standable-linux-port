@@ -23,15 +23,55 @@ export STEAM_COMPAT_CLIENT_INSTALL_PATH="@STEAM_ROOT@"
 PROTON="@PROTON@"
 logh "=== launch args: $*"
 
-# Single-instance lock up front, before any side effects. A failed flock means
-# another helper is alive, so stand down. This has to come before the
-# foreign-wineserver sweep: a duplicate helper used to kill the active one's
-# wineserver and cause a spurious 105.
-exec 9>>"${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.lock"
+# Single-instance guard, before any side effects (must precede the sweeps: a
+# duplicate helper used to kill the active one's wineserver -> spurious 105).
+# flock alone isn't enough: fd 9 is inherited by the whole Wine tree, so a
+# force-aborted SteamVR leaves an orphan holding it forever and every later
+# helper stands down -> no server -> 105/watchdog loop. Stamp the lock with our
+# PID and treat it as free unless that PID is a live helper; flock is the fast
+# path only.
+_LOCK="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.lock"
+mkdir -p "$(dirname "$_LOCK")"
+
+# _helper_alive <pid> - live launch_serverhelper.sh? /proc only (sweep.sh isn't
+# sourced yet).
+_helper_alive() {
+    local pid="$1" cmd
+    [ -n "$pid" ] && [ -d "/proc/$pid" ] || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+    case "$cmd" in
+        *launch_serverhelper.sh*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_seppid="$PPID"
+exec 9>>"$_LOCK"
+_LOCK_HELD=1
 if ! flock -n 9; then
-    logh "another helper holds the lock, standing down"
-    exit 0
+    _LOCK_HELD=0
+    _prev="$(cat "$_LOCK" 2>/dev/null)"
+    _prev_pid="${_prev%% *}"
+    if _helper_alive "$_prev_pid"; then
+        logh "another helper holds the lock (pid $_prev_pid), standing down"
+        exit 0
+    fi
+    # Dead/non-helper holder (e.g. an orphaned Wine child that inherited the
+    # fd): wait for it to release, bounded so a wedged holder can't block boot.
+    logh "lock held by non-helper pid ${_prev_pid:-?} ($(printf '%s' "$_prev" | cut -c1-60)); reclaiming"
+    for _w in 1 2 3 4 5 6 7 8 9 10; do
+        flock -n 9 && { _LOCK_HELD=1; break; }
+        sleep 0.3
+    done
+    if [ "$_LOCK_HELD" = 0 ]; then
+        # Run anyway: no server is worse than a second supervisor, and the
+        # _server_running guard below stops two actual servers. Leave fd 9
+        # unstamped so _helper_alive() ignores it.
+        logh "could not reclaim lock, running anyway (no supervisor exclusivity)"
+    fi
 fi
+[ "$_LOCK_HELD" = 1 ] && printf '%s\n' "$$" > "$_LOCK"
 
 # Proton's launcher is `#!/usr/bin/env python3` but modern Proton builds need
 # Python >= 3.11 (`from typing import Self`); SteamVR runs this driver under
@@ -115,41 +155,12 @@ fix_s() { ln -sfn "$S_TARGET" "$S_LINK" 2>/dev/null; }
 # proc_lines() and clear_foreign_wineservers() are available here.)
 
 # Fix SteamVR state: a transient handshake timeout can leave the driver
-# disabled or SteamVR in safe mode. Clear every blocker before driver load so
-# standable gets a fresh chance each session. SteamVR records the driver as
-# "blocked by a previous safe mode event" in two places:
-#   * config/steamvr.vrsettings  -> driver_standable.blocked_by_safe_mode = true
-#   * config/vrserver_crash_timestamp.txt  (the safe-mode trigger file)
-# Clearing only `enable`/`enableSafeMode` is NOT enough: those two markers are
-# what actually suppress standable on the next boot. Removing them here lets
-# the driver re-attempt cleanly even after a prior watchdog abort.
+# disabled or SteamVR in safe mode. This helper only ever runs while SteamVR is
+# up, and editing steamvr.vrsettings live makes SteamVR re-evaluate drivers - a
+# driver teardown crashes vrlink (null deref). So touch only the crash-timestamp
+# file (read at boot, safe any time); install clears the settings with SteamVR
+# down.
 fix_steamvr_state() {
-    local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
-    [ -f "$cfg" ] || return 0
-    # Back up the user's original settings before our first write, so
-    # --uninstall can restore them. Only kept once.
-    if [ ! -f "$cfg.standable.bak" ]; then
-        cp -n "$cfg" "$cfg.standable.bak" 2>/dev/null
-    fi
-    python3 - "$cfg" <<'PY' >/dev/null 2>&1 || return 0
-import json, sys
-cfg = sys.argv[1]
-d = json.load(open(cfg))
-changed = False
-ds = d.setdefault("driver_standable", {})
-if ds.pop("blocked_by_safe_mode", None) is not None:
-    changed = True
-if ds.get("enable", True) is False:
-    ds["enable"] = True
-    changed = True
-if d.get("steamvr", {}).get("enableSafeMode", False) is True:
-    d["steamvr"]["enableSafeMode"] = False
-    changed = True
-if changed:
-    json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
-PY
-    # The crash-timestamp file is SteamVR's safe-mode trigger; drop it so a
-    # fresh session isn't treated as a repeat of the previous abort.
     rm -f "@STEAM_ROOT@/config/vrserver_crash_timestamp.txt"
 }
 
@@ -165,7 +176,12 @@ fix_vrchat() {
     local src="@VRCHAT_VRC_DIR@"
     [ -n "$src" ] && [ -d "$src" ] || return 0
     local dst="$STEAM_COMPAT_DATA_PATH/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat"
-    [ -e "$dst" ] && [ ! -L "$dst" ] && return 0   # don't clobber real dir
+    # Replace a stale symlink-only layout (see install.sh); a dir with real
+    # files is deliberate, leave it.
+    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+        find "$dst" -mindepth 1 -type f 2>/dev/null | grep -q . && return 0
+        rm -rf "$dst"
+    fi
     mkdir -p "$(dirname "$dst")"
     ln -sfn "$src" "$dst"
 }
@@ -174,6 +190,7 @@ fix_vrchat() {
 # Free the prefix of any foreign-Proton leftover wineserver BEFORE we touch it:
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers
+reap_orphan_services
 logh "wineservers after sweep: $(proc_lines 'wineserver' 2>/dev/null | tr '\n' ';')"
 # Defer the PSVR2 reg import: it's a second cold Proton boot and racing the
 # server boot costs the handshake. 20 s is well inside the session.
@@ -221,8 +238,11 @@ mkdir -p "$(dirname "$SERVER_LOG")"
 _server_running() {
     local tok="${2:-}"
     [ -n "$tok" ] || return 1
+    # Exclude anything naming the helper script: this helper and any sibling
+    # the driver spawns on retry carry "<server_exe> <token> ..." like the
+    # server does. Matching own PID only let a sibling look like a live server.
     proc_lines "ignition_server\\.exe[[:space:]]+${tok}([[:space:]]|$)" 2>/dev/null \
-        | grep -v "^$$ " | grep -q .
+        | grep -v "launch_serverhelper" | grep -q .
 }
 
 # Driver's current secret, for the game-launch hook (it reuses it to build the
@@ -262,9 +282,10 @@ for _attempt in $(seq 1 40); do
     # SteamVR may have closed while we slept: never boot into a dead
     # session, just break (trap handles the remains).
     [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
-    # Single-instance guard: never run two servers in this prefix. If one
-    # exists (another helper's spawn), wait it out instead of stacking.
-    if _server_running; then
+    # Never run two servers in this prefix; wait out another helper's spawn.
+    # "$@" is needed: functions don't see the script's $2, so the token arg was
+    # empty and the guard never matched.
+    if _server_running "$@"; then
         logh "spawn skipped, server for token ${2:-?} already running (attempt $_attempt)"
         [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
         sleep 3

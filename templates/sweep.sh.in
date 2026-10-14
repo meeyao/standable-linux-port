@@ -12,18 +12,20 @@
 # SteamVR force-aborts shutdown. Kill only Wine processes from another Proton
 # build inside OUR prefix; ours and other prefixes untouched.
 
-# proc_lines - print "pid cmdline" for every process whose full command line
-# matches the extended regex $1. This is a pure-bash /proc scan on purpose:
-# SteamVR loads the driver inside the Steam Linux Runtime (Sniper) sandbox,
-# which ships no `ps`/`pgrep`, so anything running there (the launch helper and
-# this sweep) must not depend on them. Callers that only need a yes/no use
-# `proc_lines PAT | grep -q .`.
+# logh - the helper defines one; the hook doesn't, so default to a no-op.
+type logh >/dev/null 2>&1 || logh() { :; }
+
+# proc_lines - "pid cmdline" for each process matching regex $1. Pure-bash on
+# purpose: the driver runs inside the Sniper sandbox, which has no ps/pgrep (and
+# we can't assume awk). Splits the NUL-separated cmdline with the `read` builtin
+# - `$(tr '\0' ' ' ...)` forked once per process (~1 s over a loaded box) and ate
+# most of the driver's handshake window.
 proc_lines() {
-    local pat="$1" d pid cmd
+    local pat="$1" d pid arg cmd
     for d in /proc/[0-9]*; do
         pid="${d#/proc/}"
-        [ -r "$d/cmdline" ] || continue
-        cmd="$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)"
+        cmd=""
+        while IFS= read -r -d '' arg; do cmd+="$arg "; done < "$d/cmdline" 2>/dev/null
         [ -n "$cmd" ] || continue
         [[ "$cmd" =~ $pat ]] && printf '%s %s\n' "$pid" "$cmd"
     done
@@ -49,6 +51,12 @@ same_prefix() {
         | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
         | grep -x "STEAM_COMPAT_DATA_PATH=$want")
     [ -n "$env" ]
+}
+
+# steamvr_up - is a SteamVR server running? Boot-time files (the crash
+# timestamp) are safe to touch any time; steamvr.vrsettings is not.
+steamvr_up() {
+    proc_lines 'SteamVR/bin/linux64/vrserver' 2>/dev/null | grep -q .
 }
 
 # clear_foreign_wineservers - kill any Wine process whose Proton differs from
@@ -101,4 +109,65 @@ clear_foreign_wineservers() {
         # other prefixes are never touched
         kill -9 "$pid" 2>/dev/null
     done
+}
+
+# reap_orphan_services - kill the leftover Wine tree from dead sessions: the
+# Ignition server and the Wine service helpers (services/winedevice/rpcss/
+# plugplay/explorer/...) it drags along. Ignition fork()s the server and never
+# reaps it, so a crashed SteamVR reparents the whole tree to init; a stale tree
+# in our prefix is what crashes the Steam Link driver on the next boot. Scoped
+# hard: only in OUR prefix (STEAM_COMPAT_DATA_PATH) and only when detached from
+# any live steam/wine/SteamVR launcher, so a running session and unrelated Wine
+# apps are never touched.
+reap_orphan_services() {
+    local d pid pp rec
+    local -A _pp=() _comm=()
+    # ppid + comm for every process, fork-free.
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        pp=""
+        while IFS= read -r rec; do
+            case "$rec" in
+                PPid:*) pp="${rec#PPid:}"; pp="${pp//[^0-9]/}"; break ;;
+            esac
+        done < "$d/status" 2>/dev/null
+        [ -n "$pp" ] || continue
+        _pp[$pid]="$pp"
+        IFS= read -r comm < "$d/comm" 2>/dev/null
+        _comm[$pid]="$comm"
+    done
+    # Never target our own ancestry.
+    local -A _self=()
+    pp="$$"
+    while [ -n "$pp" ] && [ "$pp" != 0 ] && [ "$pp" != 1 ]; do
+        _self[$pp]=1; pp="${_pp[$pp]:-}"
+    done
+    # attached - does pid's ancestry reach a live launcher before init?
+    _attached() {
+        local p="$1" c h=0
+        while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$h" -lt 40 ]; do
+            p="${_pp[$p]:-}"; [ -n "$p" ] || return 1
+            c="${_comm[$p]}"
+            case "$c" in
+                steam|steam.sh|reaper|srt-bwrap|pv-adverb|pv-runtime|pressure-vessel*|python3|wine|wine64|wineserver|vrserver|vrmonitor|steamvr|wivrn-server|gamescope)
+                    return 0 ;;
+            esac
+            h=$((h+1))
+        done
+        return 1
+    }
+    local killed=0
+    for pid in "${!_comm[@]}"; do
+        # comm truncates to 15 chars: ignition_server.exe -> "ignition_server".
+        case "${_comm[$pid]}" in
+            ignition_server*|wineserver|wineboot*|services*|winedevice*|plugplay*|rpcss*|explorer*|svchost*|conhost*) ;;
+            *) continue ;;
+        esac
+        [ -n "${_self[$pid]+x}" ] && continue
+        same_prefix "$pid" || continue
+        _attached "$pid" && continue
+        kill -9 "$pid" 2>/dev/null && killed=$((killed + 1))
+    done
+    [ "$killed" -gt 0 ] && logh "reaped $killed orphaned ignition/wine process(es)"
+    return 0
 }

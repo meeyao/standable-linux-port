@@ -541,10 +541,15 @@ setup_vrchat_link() {
     if [ -z "$src" ] || [ ! -d "$src" ]; then
         return 0    # nothing to link yet
     fi
-    # Don't clobber a real directory someone created deliberately.
+    # Older installs left a real dir of per-entry symlinks that pins a rotated
+    # log. Replace it unless it holds real files (someone's deliberate dir).
     if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-        warn "Leaving $dst alone (real dir/link); remove it to let the port manage it"
-        return 0
+        if [ -d "$dst" ] && ! find "$dst" -mindepth 1 -type f 2>/dev/null | grep -q .; then
+            run rm -rf "$dst"
+        else
+            warn "Leaving $dst alone (real dir/link); remove it to let the port manage it"
+            return 0
+        fi
     fi
     run mkdir -p "$(dirname "$dst")"
     run ln -sfn "$src" "$dst"
@@ -679,7 +684,7 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     # driver loads - a blocked driver never clears itself. Report it here so
     # the loop can be broken with a re-install.
     if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("driver_standable",{}).get("blocked_by_safe_mode") else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
-        bad "driver blocked by a previous safe mode event - won't load next SteamVR boot. Re-run ./standable install (or launch the game once via the hook), then restart SteamVR"
+        bad "driver blocked by a previous safe mode event - won't load next SteamVR boot. Quit SteamVR, re-run ./standable install, then start SteamVR"
         fail=1
     fi
     if [ -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt" ]; then
@@ -995,7 +1000,7 @@ PY
                 bad "driver handshake failed (VRInitError_Init_InterfaceNotFound, 105) - $(basename "$_vlog") shows SteamVR loaded the shim but the server never answered:"
                 tail -n 600 "$_vlog" | grep -a "Could not create interface in driver standable\|VRInitError_Init_InterfaceNotFound" | tail -3 | sed 's/^/        /'
                 warn "  if serverhelper.log shows 'spawn skipped' with no 'server exit': quit SteamVR, pkill -f ignition_server.exe, restart SteamVR"
-                warn "  otherwise an old ignition_server.exe: re-run ./standable install on testing/rc, then restart SteamVR"
+                warn "  otherwise an old ignition_server.exe: re-run ./standable install, then restart SteamVR"
                 break
             fi
         done
@@ -1174,7 +1179,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     run rm -fv "$HOME/.local/share/icons/standable.png"
     run rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     run rm -fv "$PFX/dosdevices/s:"
-    run rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
+    run rm -rf "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link / stale layout (auto-calibration)
     # Prefix shims: we created this Steam tree (fresh prefixes have none), so
     # restore any pre-existing file from our .bak, else remove the stub.
     for _shim in vrpathreg.exe vrmonitor.exe; do
@@ -1529,6 +1534,51 @@ if [ -f "$HOME/bin/standable_launch_hook.sh" ]; then
     say "Note: launch hook moved to ~/.local/bin - update Steam Launch Options to:"
     say "  bash \$HOME/.local/bin/standable_launch_hook.sh %command%"
     say "(old ~/bin copy kept working until you switch; uninstall removes both)"
+fi
+
+# Reap the leftover Wine tree from a dead session before SteamVR starts. A
+# stale tree in our prefix is what crashes the Steam Link driver on the next
+# boot (this is the pre-start cleanup vrswitch did). sweep.sh needs PROTON +
+# STEAM_COMPAT_DATA_PATH; run it in a subshell so it can't touch install's vars.
+if [ -z "$DRY_RUN" ] && [ -f "$GAME_DIR/bin/linux64/sweep.sh" ]; then
+    PROTON="$PROTON" STEAM_COMPAT_DATA_PATH="$COMPAT" \
+        bash -c '. "$1"; reap_orphan_services' _ "$GAME_DIR/bin/linux64/sweep.sh"
+fi
+
+# Clear SteamVR's safe-mode block so the driver isn't skipped on the next boot.
+# After a crash SteamVR flags drivers "blocked_by_safe_mode" and won't load them
+# even with safe mode off. SteamVR rewrites steamvr.vrsettings while it runs, so
+# only edit it with SteamVR down (the launch helper/hook deliberately don't).
+CFG="$STEAM_ROOT/config/steamvr.vrsettings"
+if [ -f "$CFG" ]; then
+    if pgrep -x vrserver >/dev/null 2>&1; then
+        warn "SteamVR is running - not editing steamvr.vrsettings; quit SteamVR and re-run install to clear a safe-mode block"
+    else
+        [ -f "$CFG.standable.bak" ] || run cp -n "$CFG" "$CFG.standable.bak"
+        if [ -n "$DRY_RUN" ]; then
+            printf '\033[1;36m # \033[0mpython3 clears driver_*.blocked_by_safe_mode in %s\n' "$CFG"
+        else
+            python3 - "$CFG" <<'PY'
+import json, sys
+cfg = sys.argv[1]
+d = json.load(open(cfg))
+changed = False
+for v in d.values():
+    if isinstance(v, dict) and v.pop("blocked_by_safe_mode", None) is not None:
+        changed = True
+ds = d.setdefault("driver_standable", {})
+if ds.get("enable", True) is False:
+    ds["enable"] = True
+    changed = True
+if d.get("steamvr", {}).get("enableSafeMode", False) is True:
+    d["steamvr"]["enableSafeMode"] = False
+    changed = True
+if changed:
+    json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
+    print("  cleared SteamVR safe-mode block")
+PY
+        fi
+    fi
 fi
 
 # --no-safemode: SteamVR drops into Safe Mode after a driver crash, which
