@@ -1,0 +1,144 @@
+diff --git a/projects/common/rpc_driver_host.cpp b/projects/common/rpc_driver_host.cpp
+index 9476d38..4095482 100644
+--- a/projects/common/rpc_driver_host.cpp
++++ b/projects/common/rpc_driver_host.cpp
+@@ -2,6 +2,8 @@
+ #include <iostream>
+ #include <vector>
+ 
++RpcDriverHost* RpcDriverHost::s_client_host_ = nullptr;
++
+ // Needed to fix issue with how Valve didn't pack VREvent_t correctly on Linux. Thanks, Valve!
+ struct VREvent_t8
+ {
+@@ -15,6 +17,7 @@ struct VREvent_t8
+ // --- RpcDriverHost ---
+ 
+ RpcDriverHost::RpcDriverHost(vr::IVRServerDriverHost* real) : RpcObject(), real_host_(real) {
++    RpcDriverHost::s_client_host_ = this;
+     if (!IsProxy()) {
+         this->RegisterFunction(RPCFunction_DriverHost_TrackedDeviceAdded, [this](const auto& args) {
+             const std::string serial_str = args[0].asString();
+@@ -145,7 +148,11 @@ RpcDriverHost::RpcDriverHost(vr::IVRServerDriverHost* real) : RpcObject(), real_
+ 
+ RpcDriverHost::RpcDriverHost(RpcObjectId id) : RpcObject(id) {}
+ 
+-RpcDriverHost::~RpcDriverHost() {}
++RpcDriverHost::~RpcDriverHost() {
++    if (s_client_host_ == this) {
++        s_client_host_ = nullptr;
++    }
++}
+ 
+ RpcClassEnum RpcDriverHost::GetRpcClassId() const {
+     return RPCClassDriverHost;
+@@ -174,7 +181,9 @@ void RpcDriverHost::TrackedDevicePoseUpdated(uint32_t unWhichDevice, const vr::D
+         RpcSystem::CallMethod(GetId(), RPCFunction_DriverHost_TrackedDevicePoseUpdated, RpcValue((int)unWhichDevice), RpcValue((const char*)&newPose, unPoseStructSize));
+     }
+     else {
+-        real_host_->TrackedDevicePoseUpdated(unWhichDevice, newPose, unPoseStructSize);
++        if (forwarding_enabled_) {
++            real_host_->TrackedDevicePoseUpdated(unWhichDevice, newPose, unPoseStructSize);
++        }
+     }
+ }
+ 
+diff --git a/projects/common/rpc_interfaces.h b/projects/common/rpc_interfaces.h
+index bfeac07..4c59b7c 100644
+--- a/projects/common/rpc_interfaces.h
++++ b/projects/common/rpc_interfaces.h
+@@ -6,6 +6,7 @@
+ 
+ #include <openvr_driver.h>
+ #include <vr_blockqueue.h>
++#include <atomic>
+ 
+ // ************************************
+ // RPC wrapper for vr::IVRDriverContext
+@@ -94,6 +95,21 @@ public:
+ 
+ private:
+     vr::IVRServerDriverHost* real_host_ = nullptr; // Only valid on the client
++
++public:
++    // While SteamVR tears the driver down it un-owns devices but the game
++    // keeps submitting poses; stop forwarding them to avoid flooding a
++    // deactivated host (PoseUpdated: device owned by driver -1).
++    void SetForwardingEnabled(bool enabled) { forwarding_enabled_ = enabled; }
++    bool IsForwardingEnabled() const { return forwarding_enabled_; }
++
++    // Points at the single client-side real host (driver_standable.so) so the
++    // provider can stop pose forwarding during shutdown. Null elsewhere.
++    static void SetClientHost(RpcDriverHost* host) { s_client_host_ = host; }
++    static RpcDriverHost* GetClientHost() { return s_client_host_; }
++private:
++    std::atomic<bool> forwarding_enabled_{true};
++    static RpcDriverHost* s_client_host_;
+ };
+ 
+ // ********************************
+diff --git a/projects/common/rpc_server_tracked_device_provider.cpp b/projects/common/rpc_server_tracked_device_provider.cpp
+index 63ec9b6..58472b3 100644
+--- a/projects/common/rpc_server_tracked_device_provider.cpp
++++ b/projects/common/rpc_server_tracked_device_provider.cpp
+@@ -1,4 +1,5 @@
+ #include "rpc_interfaces.h"
++#include <chrono>
+ #include <vector>
+ 
+ // --- RpcServerTrackedDeviceProvider ---
+@@ -81,7 +82,18 @@ vr::EVRInitError RpcServerTrackedDeviceProvider::Init(vr::IVRDriverContext *pDri
+ 
+ void RpcServerTrackedDeviceProvider::Cleanup() {
+     if (IsProxy()) {
+-        RpcSystem::CallMethod(GetId(), RPCFunction_ServerTrackedDeviceProvider_Cleanup);
++        // SteamVR is unloading the driver: stop pushing poses into the host
++        // so trailing pose updates don't hit deactivated devices
++        // (PoseUpdated: device owned by driver -1).
++        if (RpcDriverHost* host = RpcDriverHost::GetClientHost(); host) {
++            host->SetForwardingEnabled(false);
++        }
++        // The game DLL's Cleanup can hang when the game process isn't running;
++        // don't let it wedge SteamVR's shutdown watchdog (~11s).
++        try {
++            RpcSystem::CallMethodWithTimeout(GetId(), RPCFunction_ServerTrackedDeviceProvider_Cleanup, std::chrono::seconds(4));
++        } catch (...) {
++        }
+     }
+     else {
+         real_provider_->Cleanup();
+@@ -123,7 +135,12 @@ const char *const *RpcServerTrackedDeviceProvider::GetInterfaceVersions() {
+ 
+ void RpcServerTrackedDeviceProvider::RunFrame() {
+     if (IsProxy()) {
+-        RpcSystem::CallMethod(GetId(), RPCFunction_ServerTrackedDeviceProvider_RunFrame);
++        // Bound the wait: a stalled server must not trip SteamVR's
++        // server_main watchdog (~10s). Skip this frame on timeout.
++        try {
++            RpcSystem::CallMethodWithTimeout(GetId(), RPCFunction_ServerTrackedDeviceProvider_RunFrame, std::chrono::seconds(3));
++        } catch (...) {
++        }
+     }
+     else {
+         real_provider_->RunFrame();
+diff --git a/projects/driver_ignition/driver.cpp b/projects/driver_ignition/driver.cpp
+index b80a42a..07b95d1 100644
+--- a/projects/driver_ignition/driver.cpp
++++ b/projects/driver_ignition/driver.cpp
+@@ -4,6 +4,7 @@
+ #include "time_sync.h"
+ 
+ #include <json.hpp>
++#include <chrono>
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+@@ -190,7 +191,7 @@ void *HmdDriverFactory(const char *pInterfaceName, int *pReturnCode) {
+         }
+ 
+         try {
+-            RpcValue provider_val = RpcSystem::Call(RPCFunction_Get_ServerTrackedDeviceProvider, RpcValue());
++            RpcValue provider_val = RpcSystem::CallWithTimeout(RPCFunction_Get_ServerTrackedDeviceProvider, std::chrono::seconds(15), RpcValue());
+             if (provider_val.isObject()) {
+                  if (pReturnCode) *pReturnCode = vr::VRInitError_None;
+                  g_pProviderProxy = static_cast<RpcServerTrackedDeviceProvider*>(provider_val.asObject());

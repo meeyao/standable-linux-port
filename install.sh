@@ -66,7 +66,7 @@ IGNITION_SRC="${IGNITION_SRC:-$HOME/.cache/standable-ignition}"
 # --build-from-source pins here so the build uses the same source the vendor
 # binaries were built from (hashes won't be byte-identical: the .exe outputs
 # embed a linker timestamp).
-IGNITION_COMMIT="${IGNITION_COMMIT:-6bb3c8a}"
+IGNITION_COMMIT="${IGNITION_COMMIT:-6af5d9a}"
 XWIN_VERSION="${XWIN_VERSION:-0.10.0}"
 XWIN_URL="${XWIN_URL:-https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz}"
 
