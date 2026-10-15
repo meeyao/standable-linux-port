@@ -64,34 +64,35 @@ if [ -f "$GAME_DIR/bin/linux64/sweep.sh" ]; then
     . "$GAME_DIR/bin/linux64/sweep.sh"
 fi
 clear_foreign_wineservers
-reap_orphan_services
 
 fix_vrchat() {
     local src="@VRCHAT_VRC_DIR@"
     [ -n "$src" ] && [ -d "$src" ] || return 0
     local dst="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
-    # Replace a stale symlink-only layout (see install.sh); a dir with real
-    # files is deliberate, leave it.
-    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-        find "$dst" -mindepth 1 -type f 2>/dev/null | grep -q . && return 0
-        rm -rf "$dst"
-    fi
+    [ -e "$dst" ] && [ ! -L "$dst" ] && return 0
     mkdir -p "$(dirname "$dst")"
     ln -sfn "$src" "$dst"
 }
 
-# A crash leaves block markers that suppress the driver on the NEXT boot even
-# when safe mode is off ("blocked by a previous safe mode event") in
-# steamvr.vrsettings and vrserver_crash_timestamp.txt. Drop the timestamp
-# always (read only at boot); edit settings only with SteamVR down, because a
-# live change makes SteamVR re-evaluate drivers and a teardown crashes vrlink.
-# This normally no-ops (the hook runs with SteamVR up); install clears settings.
+# SteamVR persistently disables drivers that fail/abort at load ("Not loading
+# driver X because it is disabled in settings"). Re-enable ours BEFORE SteamVR
+# starts so a transient handshake timeout doesn't strand the driver between
+# sessions. A crash also leaves block markers that suppress the driver on the
+# NEXT boot even when safe mode is off ("blocked by a previous safe mode
+# event"):
+#   * config/steamvr.vrsettings  -> driver_standable.blocked_by_safe_mode
+#   * config/vrserver_crash_timestamp.txt  (the safe-mode trigger file)
+# The driver's own launch script clears these too, but it only runs when the
+# driver loads - so a blocked driver never clears itself. The hook runs on
+# every game launch, so clearing here breaks that loop without a reinstall.
 reenable_driver() {
-    rm -f "@STEAM_ROOT@/config/vrserver_crash_timestamp.txt"
-    steamvr_up && return 0
     local cfg="@STEAM_ROOT@/config/steamvr.vrsettings"
     [ -f "$cfg" ] || return 0
-    [ -f "$cfg.standable.bak" ] || cp -n "$cfg" "$cfg.standable.bak" 2>/dev/null
+    # Back up the user's original settings before our first write, so
+    # --uninstall can restore them. Only kept once.
+    if [ ! -f "$cfg.standable.bak" ]; then
+        cp -n "$cfg" "$cfg.standable.bak" 2>/dev/null
+    fi
     python3 - "$cfg" <<'PY' >/dev/null 2>&1 || return 0
 import json, sys
 cfg = sys.argv[1]
@@ -109,6 +110,9 @@ if d.get("steamvr", {}).get("enableSafeMode", False) is True:
 if changed:
     json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
 PY
+    # The crash-timestamp file is SteamVR's safe-mode trigger; drop it so a
+    # fresh session isn't treated as a repeat of the previous abort.
+    rm -f "@STEAM_ROOT@/config/vrserver_crash_timestamp.txt"
 }
 
 fix_s

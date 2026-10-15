@@ -613,13 +613,14 @@ Clone Ignition:
 ```sh
 git clone https://github.com/BnuuySolutions/Ignition.git
 cd Ignition
-git checkout 6af5d9a
+git checkout 6bb3c8a
 ```
 
-Apply the patch:
+Apply the patches:
 
 ```sh
-git apply /path/to/standable-linux-port/build/patches/ignition-standable-upstream.patch
+git apply /path/to/standable-linux-port/build/patches/ignition-rpc-timeout.patch
+git apply /path/to/standable-linux-port/build/patches/ignition-server-registration-order.patch
 ```
 
 Build:
@@ -664,27 +665,52 @@ It does **not** prove that the binaries are safe or that they came from a partic
 
 If you want maximum trust, read the patches and build the binaries yourself.
 
-The shipped Ignition binaries are based on upstream commit `6af5d9a` plus the patch below. Upstream's own release binaries will not match `SHA256SUMS`; these carry the patch.
+The shipped Ignition binaries are based on upstream commit `6bb3c8a` plus the two patches below. Upstream's own release binaries will not match `SHA256SUMS`; these carry the patches.
 
 ---
 
-# The Ignition Patch
+# The Ignition Patches
 
-### `ignition-standable-upstream.patch`
+### `ignition-server-registration-order.patch`
 
-Rebased on upstream `6af5d9a`, which already includes the RPC timeout helpers and the server registration-order fix. This patch carries only what upstream does not:
-
-* A 15 s bound on the driver's initial handshake, 4 s on `Cleanup`, 3 s on `RunFrame`, so a dead or slow server fails the driver load instead of tripping SteamVR's `load_drivers` watchdog (~21 s) and taking down the whole runtime.
-* A teardown pose guard: once SteamVR starts unloading the driver, the client host stops forwarding poses, so trailing updates from the game can't hit devices SteamVR has already un-owned (`PoseUpdated: device owned by driver -1`).
-
-Files:
+Fixes intermittent:
 
 ```text
-projects/driver_ignition/driver.cpp
-projects/common/rpc_interfaces.h
-projects/common/rpc_driver_host.cpp
-projects/common/rpc_server_tracked_device_provider.cpp
+VRInitError_Init_InterfaceNotFound
 ```
+
+The server previously started listening for RPC requests before registering the server's tracked-device-provider function.
+
+The driver can ask for that function immediately after starting the server. If the request arrives before registration, it gets a null response and the driver fails.
+
+The patch registers the function first.
+
+Affected file:
+
+```text
+projects/ignition_server/main.cpp
+```
+
+### `ignition-rpc-timeout.patch`
+
+Adds timeouts to Ignition RPC calls.
+
+Without these timeouts, an RPC call can wait up to the default 60 seconds. SteamVR's watchdog is much shorter, so a dead server can make SteamVR abort and enter Safe Mode.
+
+The patch adds:
+
+* `CallMethodTimeout` in `rpc_core.cpp` / `rpc_core.h`
+* A timeout on the driver's initial handshake
+* A timeout on `Cleanup`
+* A timeout on `RunFrame`
+
+The driver handshake is limited to 15 seconds.
+
+`Cleanup` is limited to 4 seconds.
+
+`RunFrame` is limited to 3 seconds.
+
+Upstream later added similar timeout functionality for time-sync, but the additional driver and shutdown call sites above are still needed for the failure modes this patch handles.
 
 ---
 
@@ -695,7 +721,7 @@ Start from the exact upstream commit:
 ```sh
 git clone https://github.com/BnuuySolutions/Ignition.git
 cd Ignition
-git checkout 6af5d9a
+git checkout 6bb3c8a
 ```
 
 Make your changes, then:

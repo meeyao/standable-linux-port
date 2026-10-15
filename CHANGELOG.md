@@ -44,23 +44,7 @@
   installer. It also refuses to run while SteamVR is running.
 * Fixed `--dry-run` accidentally running file operations.
 * `--build-from-source` now builds against the pinned Ignition commit
-  `6af5d9a`, matching the source used for the shipped binaries.
-* Updated the bundled Ignition to upstream `6af5d9a`. Upstream now carries the
-  RPC timeout helpers and the server registration-order fix, so the port ships
-  one local patch instead of two: a teardown pose guard plus 15 s / 4 s / 3 s
-  caps on the driver handshake, `Cleanup`, and `RunFrame`.
-* Fixed the server single-instance guard never matching after it was made
-  token-scoped, which let two helpers stack competing servers on one shm.
-* The launch helper no longer spends the driver's handshake window on the
-  stale-process sweep; the `/proc` scan is fork-free instead of one `tr` per
-  process.
-* Migrated VRChat's `LocalLow` link from an old per-entry layout to a single
-  symlink, so auto-calibration reads VRChat's live log again instead of a
-  rotated-away one.
-* Stopped the launch helper and hook editing `steamvr.vrsettings` while SteamVR
-  runs. A live change makes SteamVR re-evaluate drivers, and a driver teardown
-  crashes the Steam Link (`vrlink`) driver in current SteamVR. The safe-mode
-  block is now cleared by `./standable install` with SteamVR closed.
+  `6bb3c8a`, matching the source used for the shipped binaries.
 
 ### Diagnostics
 
@@ -77,7 +61,7 @@
   binaries, not their provenance.
 * Documented why locally rebuilt Windows binaries don't have the same hashes as
   the vendored copies.
-* Pinned the documented Ignition source and patches to `6af5d9a`.
+* Pinned the documented Ignition source and patches to `6bb3c8a`.
 
 ---
 
