@@ -127,9 +127,12 @@ fi
 
 # Launch in host context (like the retired standable-gui): direct $PROTON run
 # of the game exe. This is what renders the desktop GUI window while SteamVR
-# runs. Steam's own %command% is deliberately ignored: chaining it registers
-# the app as a VR overlay (steam.overlay.<appid>) and SteamVR drops it
-# immediately - no window, and the game exits. Direct run shares the same
+# runs. Steam's own %command% is deliberately ignored: chaining it makes Steam
+# treat the launch itself as an overlay process and it gets dropped
+# immediately - no window, and the game exits. (The game still registers as
+# steam.overlay.<appid> with vrserver on its own - observed in vrserver.txt -
+# so this only fixes the launch path, not overlay mode itself.) Direct run
+# shares the same
 # prefix/wineserver as the driver, so their IPC still works. The Steam API
 # still authenticates because the Steam client is running and
 # SteamAppId/SteamGameId are exported above.
