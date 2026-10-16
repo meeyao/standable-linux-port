@@ -65,6 +65,19 @@ clear_foreign_wineservers() {
     home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/compatibilitytools\.d/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && home_name=$(printf '%s' "$home_dir" | sed -nE 's#.*/steamapps/common/([^/]+)/?$#\1#p')
     [ -z "$home_name" ] && return 0
+    # Our own launcher tree (Steam's launch-client/supervisor/reaper plus this
+    # shell) carries the game's proton path - quoted - in its cmdline and our
+    # prefix in its environ, so it looks "foreign". Never kill ancestors or
+    # self: on the 64-bit client that murdered our own launch (every Play press
+    # died ~1 s in with no game). Pure-/proc walk: no ps under Sniper.
+    local ancestors=" $$" _p=$$ _st
+    while [ "$_p" != 1 ] && [ -r "/proc/$_p/stat" ]; do
+        _st="$(cat "/proc/$_p/stat" 2>/dev/null)" || break
+        _st="${_st##*) }"
+        set -- $_st; _p="${2:-1}"
+        case " $ancestors " in *" $_p "*) break ;; esac
+        ancestors="$ancestors $_p"
+    done
     # Candidate scan: ONE pass over /proc cmdlines (see proc_lines above).
     # The earlier version read /proc/<pid>/environ for every wine-ish process
     # on the box, which cost ~5 s on a loaded system; that alone pushed the
@@ -93,6 +106,13 @@ clear_foreign_wineservers() {
                 | head -1 | sed -E 's#.*/##')
         fi
         [ -z "$pname" ] && continue
+        # Steam's 64-bit launcher quotes the build path
+        # ('.../proton-cachyos-slr'/proton), so the extraction above captures a
+        # trailing quote and our own launcher looks foreign. Quotes are never
+        # part of a build name.
+        pname="${pname//[\'\"]/}"
+        # Never kill our own launcher tree, whatever the name says (see above).
+        case " $ancestors " in *" $pid "*) continue ;; esac
         [ "$pname" = "$home_name" ] && continue
         # only our own prefix: a foreign-proton wineserver elsewhere is harmless
         same_prefix "$pid" || continue

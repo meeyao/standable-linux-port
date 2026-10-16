@@ -4,6 +4,13 @@
 
 ### Fixes
 
+* Fixed Play-in-Steam killing its own launch on the 64-bit client: the
+  stale-wineserver sweep matched Steam's launch-client (its cmdline carries the
+  game's Proton path, quoted: `'.../proton-cachyos-slr'/proton`), misread the
+  build name with a trailing quote, and `kill -9`'d our own launcher ~1 s in.
+  Build names are now quote-stripped and the sweep never kills its own
+  ancestor tree.
+
 * Fixed the recurring `105` where a helper orphaned by a crashed SteamVR
   session held the global lock, so the next boot's helper (new token) stood
   down forever. The lock is now per-token, the server guard is token-scoped
