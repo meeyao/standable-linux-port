@@ -4,6 +4,14 @@
 
 ### Fixes
 
+* Fixed the recurring `105` where a helper orphaned by a crashed SteamVR
+  session held the global lock, so the next boot's helper (new token) stood
+  down forever. The lock is now per-token, the server guard is token-scoped
+  (helpers excluded), the helper kills its server when its session dies, and
+  background jobs no longer inherit the lock fd. Verified with a lock/guard/
+  session simulation (launch, duplicate stand-down, cross-token parallel,
+  session-death reap, relaunch).
+
 * Fixed the installer copying a stub `steam_api64.dll` over the real
   Steamworks runtime. Standable ships a 4 KB placeholder in `bin/win64/`, and
   `resolve_steam_api64` trusted any file there, so the Windows driver failed to
