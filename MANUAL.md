@@ -441,6 +441,13 @@ That's what makes the desktop settings window work normally.
 
 Standable can read VRChat's IK debug log for auto-calibration.
 
+Two settings must be on first:
+
+1. In VRChat: Action Menu → **OSC** → **Enabled**. (OSC is off by default.)
+2. In Standable: **Configure VRChat for Auto Calibration**.
+
+Standable sends VRChat's IK-debug-logging and one-handed-calibration params over OSC; without step 1 they never arrive, so the calibrate button does nothing.
+
 VRChat has its own Proton prefix, so link its log directory into Standable's prefix:
 
 ```sh

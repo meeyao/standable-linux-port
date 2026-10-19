@@ -309,6 +309,18 @@ Run:
 
 Then restart SteamVR.
 
+### Auto-calibration does nothing
+
+Standable's auto-calibration talks to VRChat over OSC, and **VRChat OSC is off by default**:
+
+1. In VRChat: Action Menu → **OSC** → **Enabled**.
+2. In Standable: enable **Configure VRChat for Auto Calibration**.
+3. Restart VRChat (or rejoin the world) so it starts emitting IK debug data.
+
+Standable sets VRChat's IK-debug-logging and one-handed-calibration params over OSC. Until step 1 is done those params never arrive, so pressing VRChat's calibrate button does nothing.
+
+`./standable check` reports whether VRChat's log is linked and whether OSC is enabled.
+
 ### Checkerboard background in the settings window
 
 This is a cosmetic Proton rendering bug.

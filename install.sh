@@ -704,6 +704,16 @@ if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
     else
         warn "VRChat not found - auto-calibration requires it to be installed"
     fi
+    # VRChat OSC is OFF by default. Standable sends its IK-debug-logging and
+    # one-handed-calibration params over OSC, so auto-calibration silently does
+    # nothing until the user enables it in VRChat's Action Menu.
+    if [ -n "${VRC_COMPAT:-}" ] && [ -f "$VRC_COMPAT/pfx/user.reg" ]; then
+        if grep -aq 'VRC_INPUT_OSC_h[0-9]*"=dword:00000001' "$VRC_COMPAT/pfx/user.reg"; then
+            ok "VRChat OSC enabled (auto-calibration can set its IK params)"
+        else
+            warn "VRChat OSC is OFF - Action Menu > OSC > Enabled (auto-calibration needs it)"
+        fi
+    fi
     grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
         && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
     # The S:\-form seed entry is what silences the game's per-boot "driver
@@ -1345,6 +1355,13 @@ run cp "$PC"/vrclient*.dll "$PFX/drive_c/vrclient/bin/"
 # inside ITS OWN prefix; VRChat runs in a separate prefix (438100), so we link
 # VRChat's data in. Also cached for the per-launch repair loops (@VRCHAT_VRC_DIR@).
 setup_vrchat_link
+
+# Auto-calibration also needs VRChat's OSC toggle, which is off by default
+# (Standable sends its IK params over OSC). Report it; don't fail the install.
+if [ -n "${VRC_COMPAT:-}" ] && [ -f "$VRC_COMPAT/pfx/user.reg" ] \
+   && ! grep -aq 'VRC_INPUT_OSC_h[0-9]*"=dword:00000001' "$VRC_COMPAT/pfx/user.reg"; then
+    say "NOTE: VRChat OSC is off; enable Action Menu > OSC > Enabled for auto-calibration."
+fi
 
 # -- registry ----------------------------------------------------------------
 say "Setting SteamPath registry (HKCU\\Software\\Valve\\Steam)…"
