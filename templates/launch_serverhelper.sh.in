@@ -249,7 +249,9 @@ warm_wineserver
 # 9>&-: flock lives on the open file description, so background children that
 # inherit fd 9 would keep the token lock held after this helper exits (the
 # same goes for the repair loop and the server below).
-( sleep 20; "$PROTON" run reg import ./wine_psvr2_hidraw.reg ) >/dev/null 2>&1 9>&- &
+# Direct wine, not "$PROTON" run: Proton run does prefix maintenance on this
+# same prefix and deletes the server dir/socket, which breaks GUI<->driver IPC.
+( sleep 20; "$PROTON_WINE" reg import ./wine_psvr2_hidraw.reg ) >/dev/null 2>&1 9>&- &
 
 fix_s
 fix_vrchat
@@ -345,6 +347,24 @@ for _attempt in $(seq 1 40); do
         "$PROTON" runinprefix "$@" >> "$SERVER_LOG" 2>&1 9>&- &
         _srv=$!
         _how="runinprefix"
+    fi
+    # Optional: spawn the Standable GUI into the SAME wineserver as the driver.
+    # It must start now, while the prefix server socket still exists: Wine/
+    # Proton deletes it later, after which a new process cannot discover the
+    # driver's server and its named-pipe IPC never connects. WiVRn sets
+    # STANDABLE_GUI=1; the SteamVR port leaves it unset.
+    if [ "${STANDABLE_GUI:-0}" = "1" ] && [ -x "$PROTON_WINE" ] && [ "${_gui_spawned:-0}" != "1" ]; then
+        _gui_spawned=1
+        _gd="$(cd "$(dirname "$1")/../.." 2>/dev/null && pwd)"
+        _sd="/tmp/.wine-$(id -u)/server-$(printf %x "$(stat -c %d "$WINEPREFIX" 2>/dev/null || echo 0)")-$(printf %x "$(stat -c %i "$WINEPREFIX" 2>/dev/null || echo 0)")"
+        (
+            # Unity needs its working directory at the game root or it cannot
+            # find Standable_Data and renders missing-texture checkerboards.
+            cd "$_gd" 2>/dev/null || exit 1
+            for _i in $(seq 1 40); do [ -S "$_sd/socket" ] && break; sleep 0.2; done
+            logh "spawning GUI in driver wineserver: $_gd/Standable.exe"
+            env SteamAppId=@APP_ID@ SteamGameId=@APP_ID@ SteamClientLaunch=1 SteamEnv=1 "$PROTON" run "$_gd/Standable.exe" >> "${XDG_STATE_HOME:-$HOME/.local/state}/standable/gui-wivrn.log" 2>&1
+        ) 9>&- &
     fi
     while _srv_alive "$_srv"; do
         if [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ]; then
