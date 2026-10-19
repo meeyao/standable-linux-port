@@ -403,7 +403,7 @@ Then attach the relevant logs.
 ## Compatibility
 
 * **Steam Link:** tested and working
-* **WiVRN:** work in progress
+* **WiVRn:** work in progress — see the [WiVRn port](https://github.com/meeyao/standable-wivrn-port)
 * **ALVR:** unstable
 * **Mixed tracking:** supported, including Standable + SlimeVR + hardware trackers
 * Existing OpenVR drivers are left alone
