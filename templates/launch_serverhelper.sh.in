@@ -220,6 +220,30 @@ fix_vrchat() {
 # a stale one would block our server launch and trip SteamVR's watchdog.
 clear_foreign_wineservers
 logh "wineservers after sweep: $(proc_lines 'wineserver' 2>/dev/null | tr '\n' ';')"
+
+# Serialise the prefix wineserver before the server launch. Concurrent wine
+# starts (ignition_server + services/winedevice/plugplay) can race on the
+# server dir and leave the live wineserver with an unlinked socket. A later
+# wine (the Standable GUI) then cannot discover it and starts its OWN server,
+# so the named-pipe IPC (StandUI/StandAPI) never connects. Warm once and wait
+# for the socket file so there is exactly one, discoverable server.
+warm_wineserver() {
+    [ -n "${PROTON_WINE:-}" ] && [ -x "$PROTON_WINE" ] || return 0
+    local pfx="$STEAM_COMPAT_DATA_PATH/pfx" sd i
+    sd="/tmp/.wine-$(id -u)/server-$(printf %x "$(stat -c %d "$pfx" 2>/dev/null || echo 0)")-$(printf %x "$(stat -c %i "$pfx" 2>/dev/null || echo 0)")"
+    # Persistent server: a one-shot warm idle-exits before the driver
+    # starts, so the driver would create a fresh (unlocked) server and the
+    # later GUI would see it as stale and replace it. -p keeps one owner.
+    "${PROTON_DIR:-$(dirname "$PROTON")}/files/bin/wineserver" -p >/dev/null 2>&1 || true
+    for i in $(seq 1 25); do [ -S "$sd/socket" ] && break; sleep 0.2; done
+    if [ -S "$sd/socket" ]; then
+        logh "wineserver warm: $sd/socket"
+    else
+        logh "wineserver warm: no socket at $sd/socket"
+    fi
+}
+warm_wineserver
+
 # Defer the PSVR2 reg import: it's a second cold Proton boot and racing the
 # server boot costs the handshake. 20 s is well inside the session.
 # 9>&-: flock lives on the open file description, so background children that
