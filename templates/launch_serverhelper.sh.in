@@ -248,6 +248,15 @@ logh "launching: $PROTON run $*"
 # Capture the server's own output too: an instant exit-0 (no handshake, bad
 # config, missing DLL) otherwise leaves no trace at all.
 SERVER_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/server.out"
+
+# This log grows fast (DM_Refresh/pose spam). Keep one previous generation.
+_SERVER_LOG_MAX=$((16 * 1024 * 1024))
+if [ -f "$SERVER_LOG" ]; then
+    _slog_sz="$(stat -c %s "$SERVER_LOG" 2>/dev/null || echo 0)"
+    if [ "${_slog_sz:-0}" -ge "$_SERVER_LOG_MAX" ]; then
+        mv -f "$SERVER_LOG" "$SERVER_LOG.1" 2>/dev/null || : > "$SERVER_LOG"
+    fi
+fi
 mkdir -p "$(dirname "$SERVER_LOG")"
 # The server must be ALIVE when SteamVR asks the driver for its interfaces.
 # SteamVR probes once shortly after Init and only retries at the next event
