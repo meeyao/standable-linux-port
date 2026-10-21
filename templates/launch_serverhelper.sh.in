@@ -275,16 +275,19 @@ _seppid="$PPID"
 # `steam` - it outlives every session and the death test below never fires.
 # Prefer the live vrserver. If it is not visible yet, keep $PPID; the
 # driver-token check in the wait loop still ends the helper.
-if [ -r "/proc/$_seppid/comm" ] && [ "$(cat "/proc/$_seppid/comm" 2>/dev/null)" != "vrserver" ] \
-   && [ "$(cat "/proc/$_seppid/comm" 2>/dev/null)" != "wivrn-server" ]; then
-    for _c in /proc/[0-9]*/comm; do
-        if [ "$(cat "$_c" 2>/dev/null)" = "vrserver" ]; then
-            _seppid="${_c#/proc/}"
-            _seppid="${_seppid%/comm}"
-            break
-        fi
-    done
-fi
+_seppcomm="$(cat "/proc/$_seppid/comm" 2>/dev/null || true)"
+case "$_seppcomm" in
+    vrserver|wivrn-server) ;;
+    *)
+        for _c in /proc/[0-9]*/comm; do
+            if [ "$(cat "$_c" 2>/dev/null)" = "vrserver" ]; then
+                _seppid="${_c#/proc/}"
+                _seppid="${_seppid%/comm}"
+                break
+            fi
+        done
+        ;;
+esac
 _repair_pid="${_repair_pid:-}"
 
 # Server runs go in the background under a supervisor poll (see the attempt
