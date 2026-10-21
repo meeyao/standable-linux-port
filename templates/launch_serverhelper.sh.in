@@ -356,6 +356,16 @@ for _attempt in $(seq 1 40); do
     _ticks=0
     while _srv_alive "$_srv"; do
         _ticks=$((_ticks + 1))
+        # SteamVR can start a new driver token without unloading the old one
+        # (seen on a vrserver restart). The newest helper owns current_secret;
+        # an older one must retire its driver or both fight over the pose feed.
+        _cur="$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/standable/current_secret" 2>/dev/null || true)"
+        if [ -n "$_cur" ] && [ "$_cur" != "${2:-}" ]; then
+            logh "superseded by token $_cur - clearing server $_srv"
+            _kill_server "$@"
+            _server_code=143
+            break 2
+        fi
         if _server_running "$@"; then
             _seen=1
             _gone=0
