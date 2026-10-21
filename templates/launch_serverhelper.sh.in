@@ -330,6 +330,7 @@ for _attempt in $(seq 1 40); do
     # (KILL after a grace), stop supervising, exit.
     # 9>&- on both: the server outlives the helper on the 40-attempt path, and
     # an inherited fd 9 would keep this token's lock held after a relaunch.
+    _t0=$SECONDS
     if [ -x "$PROTON_WINE" ]; then
         "$PROTON_WINE" "$@" >> "$SERVER_LOG" 2>&1 9>&- &
         _srv=$!
@@ -400,6 +401,14 @@ for _attempt in $(seq 1 40); do
     wait "$_srv" 2>/dev/null
     _server_code=$?
     logh "server exit: $_server_code (attempt $_attempt, $_how)"
+    # A driver that ran a real session and then crashed cannot re-attach to the
+    # shim's RPC objects by respawning with the same token (poses freeze with
+    # "Target object not found"). Let SteamVR reload the driver instead.
+    _ran=$((SECONDS - _t0))
+    if [ "$_ran" -ge 60 ]; then
+        logh "server ran ${_ran}s - not respawning"
+        break
+    fi
     [ -n "$_seppid" ] && [ -d "/proc/$_seppid" ] || break
     # Keep a server up through the driver's retry window. Short gap, many
     # attempts; cheap when the shm is gone (server exits immediately).
