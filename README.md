@@ -1,3 +1,22 @@
+> **This is the pre-beta patch, kept for people who still need it.** The
+> current `open-beta` build has its own driver, so don't install this over it.
+> If you're staying on the pre-beta Standable build, the guide below still
+> applies.
+>
+> Moving to the official Standable build? Remove the old patch with the
+> uninstaller on
+> [`testing/rc`](https://github.com/meeyao/standable-linux-port/tree/testing/rc),
+> not the old `--uninstall` in this branch.
+>
+> I'm still working on the
+> [WiVRn port](https://github.com/meeyao/standable-wivrn-port).
+
+- [`testing/rc`](https://github.com/meeyao/standable-linux-port/tree/testing/rc):
+  the page most links point at, with the uninstaller.
+- `ignition`: this old code.
+
+---
+
 # Standable FBE Linux Patch (Unofficial)
 
 Run **Standable Full Body Estimation on Linux** using its Windows binaries through Proton.
@@ -39,7 +58,7 @@ Some known-working versions are listed below.
 ### 3. Install the patch
 
 ```sh
-git clone https://github.com/meeyao/standable-linux-port.git
+git clone -b ignition https://github.com/meeyao/standable-linux-port.git
 cd standable-linux-port
 ./install.sh
 ```
