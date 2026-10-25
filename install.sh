@@ -1,340 +1,59 @@
 #!/bin/bash
-# install.sh - Standable Full Body Estimation Linux port installer
-# Repo: https://github.com/meeyao/standable-linux-port
+# install.sh - Standable FBE Linux patch (RETIRED)
 #
-#   ./install.sh              install / repair (idempotent)
-#   ./install.sh --check      doctor: verify a running setup + full system dump
-#   ./install.sh --uninstall  remove everything this script added
-#   ./install.sh --build      rebuild the Ignition shim from source
-#                          (--force to rebuild even if cached; needs
-#                          clang/lld/cmake/ninja + Windows SDK via xwin,
-#                          else falls back to prebuilt vendor/ copies)
-#   Every run is logged to ~/.local/state/standable/install.log
-#   (--log FILE writes there instead). --check appends a full system dump to
-#   the log for sharing when filing issues; --diagnose is a deprecated alias.
+# Standable now ships official Linux support, so this repo no longer installs
+# anything. The script is kept as the uninstaller for people who used an older
+# version of the patch.
 #
-# Works with any host-launchable Proton build. Tested on Arch Linux.
+#   ./install.sh              explain the retirement (changes nothing)
+#   ./install.sh --uninstall  remove everything the old patch added
+#   ./install.sh --uninstall --dry-run
+#                          print every command, change nothing
+#   ./install.sh --uninstall --assume-yes
+#                          do not refuse while SteamVR is running
+#   --log FILE               write the transcript somewhere else
+#
+# Archived. Active work: https://github.com/meeyao/standable-wivrn-port
 
 set -u
 APP_ID=2370570
 GAME_SUBDIR="Standable Full Body Estimation"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STAMP="$(date +%Y%m%d%H%M%S)"
 
 say()  { printf '\033[1;32m==>\033[0m %s\n' "$*";  _log ">>> $*"; }
 warn() { printf '\033[1;33m ->\033[0m %s\n' "$*";  _log "WARN $*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; _log "ERROR $*"; exit 1; }
 _log() { [ -n "${LOG_FILE:-}" ] && printf '%s\n' "$*" >> "$LOG_FILE"; }
-bak()  { # bak <file> - timestamped backup before overwrite (keeps newest 2)
-    if [ -n "$DRY_RUN" ]; then
-        [ -f "$1" ] && printf '\033[1;36m # \033[0mcp -n %s %s.bak-%s\n' "$1" "$1" "$STAMP"
-        return 0
-    fi
-    [ -f "$1" ] && cp -n "$1" "$1.bak-$STAMP" 2>/dev/null
-    # Prune older timestamped backups of this file; keep the newest 2.
-    ls -1t "$1".bak-* 2>/dev/null | tail -n +3 | while IFS= read -r _b; do
-        rm -f "$_b"
-    done
-}
-# run - execute a mutating command, or print it verbatim under --dry-run so a
-# user can perform the install by hand. Everything that changes disk state on
-# the system goes through here.
-run() { # run <cmd...>
+# run - execute a mutating command, or print it verbatim under --dry-run.
+run() {
     if [ -n "$DRY_RUN" ]; then
         printf '\033[1;36m # \033[0m%s\n' "$*"
     else
         "$@"
     fi
 }
-run_env() { # run_env <env_kv...> -- <cmd...> (env prefix applied/printed)
-    if [ -n "$DRY_RUN" ]; then
-        printf '\033[1;36m # \033[0m'
-        while [ "$1" != "--" ]; do printf '%s ' "$1"; shift; done
-        shift
-        printf '%s\n' "$*"
-        return 0
-    fi
-    local _envs=()
-    while [ "$1" != "--" ]; do _envs+=("$1"); shift; done
-    shift
-    env "${_envs[@]}" "$@"
-}
 
-IGNITION_URL="${IGNITION_URL:-https://github.com/BnuuySolutions/Ignition.git}"
-IGNITION_SRC="${IGNITION_SRC:-$HOME/.cache/standable-ignition}"
-# Upstream commit the vendored binaries and build/patches are against.
-# --build-from-source pins here so the build uses the same source the vendor
-# binaries were built from (hashes won't be byte-identical: the .exe outputs
-# embed a linker timestamp).
-IGNITION_COMMIT="${IGNITION_COMMIT:-6bb3c8a}"
-XWIN_VERSION="${XWIN_VERSION:-0.10.0}"
-XWIN_URL="${XWIN_URL:-https://github.com/Jake-Shadle/xwin/releases/download/$XWIN_VERSION/xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz}"
-
-# Ensure xwin is available (PATH = ~/.local/bin if a rootless copy exists).
-ensure_xwin() {
-    export PATH="$HOME/.local/bin:$PATH"
-    if command -v xwin >/dev/null 2>&1; then return 0; fi
-    if [ ! -f "$HOME/.local/bin/xwin" ]; then
-        say "Fetching prebuilt xwin v$XWIN_VERSION …"
-        mkdir -p "$HOME/.local/bin"
-        tmp=$(mktemp)
-        if ! curl -fsSL --max-time 120 "$XWIN_URL" -o "$tmp"; then
-            rm -f "$tmp"
-            warn "xwin download failed:"
-            warn "  $XWIN_URL"
-            return 1
-        fi
-        tar -xzf "$tmp" -C "$HOME/.local/bin" --strip-components=1 || { rm -f "$tmp"; warn "xwin archive corrupt"; return 1; }
-        rm -f "$tmp"
-        chmod +x "$HOME/.local/bin/xwin"
-    fi
-    command -v xwin >/dev/null 2>&1
-}
-
-# Ensure the Windows SDK is splatted to ~/.xwin-cache/splat via xwin (one-time,
-# ~1-2 GB download).
-ensure_xwin_sdk() {
-    [ -d "$HOME/.xwin-cache/splat" ] && return 0
-    ensure_xwin || return 1
-    say "Downloading Windows SDK via xwin (~1-2 GB, one-time)…"
-    mkdir -p "$HOME/.xwin-cache"
-    # Show live progress: xwin writes into ~/.xwin-cache; report its size every
-    # few seconds so the download never looks hung.
-    ( last=""
-      while true; do
-          s=$(du -sh "$HOME/.xwin-cache" 2>/dev/null | awk '{print $1}')
-          [ "$s" != "$last" ] && { printf '  SDK download: %s\n' "$s"; last="$s"; }
-          sleep 5
-      done ) &
-    local prog=$!
-    if ! xwin --accept-license splat --output "$HOME/.xwin-cache/splat" >>"${LOG_FILE:-/dev/null}" 2>&1; then
-        kill $prog 2>/dev/null
-        warn "xwin splat failed. Last lines from ${LOG_FILE:-log}:"
-        [ -n "${LOG_FILE:-}" ] && tail -8 "$LOG_FILE" | sed 's/^/    /'
-        return 1
-    fi
-    kill $prog 2>/dev/null
-}
-
-# ensure_build_toolchain - make sure every tool needed by `--build-from-source`
-# exists. Installs missing system packages via the distro package manager (with
-# user confirmation + sudo), fetches prebuilt xwin, and splats the SDK.
-ensure_build_toolchain() {
-    local missing_all=""
-    for t in cmake ninja clang clang++ lld-link llvm-rc llvm-ml; do
-        command -v "$t" >/dev/null 2>&1 || missing_all="$missing_all $t"
-    done
-    command -v strace >/dev/null 2>&1 || missing_all="$missing_all strace"
-    command -v git >/dev/null 2>&1    || missing_all="$missing_all git"
-
-    if [ -n "$missing_all" ]; then
-        local id id_like; . /etc/os-release 2>/dev/null
-        local pm=""; local pkgs=""
-        case "$ID $ID_LIKE" in
-            *arch*|*cachyos*|*manjaro*) pm="pacman -S --needed --noconfirm"; pkgs="clang lld llvm cmake ninja strace git" ;;
-            *fedora*|*centos*|*rhel*|*rocky*) pm="dnf install -y";            pkgs="clang lld llvm cmake ninja-build strace git" ;;
-            *debian*|*ubuntu*|*mint*) pm="apt-get install -y";                pkgs="clang lld llvm cmake ninja-build strace git" ;;
-            *) pm="";;
-        esac
-        if [ -z "$pm" ]; then
-            die "--build-from-source: missing:$missing_all. Install them manually (clang, lld, cmake, ninja, strace, git)."
-        fi
-        local doit=""
-        [ -n "${ASSUME_YES:-}" ] || { read -r -p "Missing build tools (${missing_all# }). Install via '$pm $pkgs' (needs sudo)? [y/N] " doit; }
-        case "$doit" in y|Y|yes) ;; *) die "--build-from-source: aborting, no toolchain installed.";; esac
-        say "Installing build toolchain (may prompt for sudo)…"
-        sudo -v 2>/dev/null || true
-        if ! sudo $pm $pkgs >>"$LOG_FILE" 2>&1; then
-            # surface the real reason (e.g. mirror 404, conflict) instead of a
-            # bare "see the log" - mirror flakiness is the usual culprit
-            warn "package install failed. Last lines from $LOG_FILE:"
-            tail -8 "$LOG_FILE" | sed 's/^/    /'
-            die "--build-from-source: package install failed (full log: $LOG_FILE)"
-        fi
-    fi
-
-    ensure_xwin_sdk || die "--build-from-source: could not set up xwin/Windows SDK (download the Linux xwin release from github.com/Jake-Shadle/xwin)."
-}
-
-
-# build_ignition - clone + cross-compile Ignition (Linux .so + Windows .exe/.dll)
-# from source. Needs clang/lld/llvm (MSVC target), cmake, ninja, and the Windows
-# SDK via xwin (~/.xwin-cache). Only used with --build-from-source; otherwise the
-# prebuilt vendor/ copies are used. Outputs:
-#   $IGNITION_SRC/build/Ignition-Linux-Windows/{libdriver_ignition.so,ignition_server.exe,ignition_bridge.dll}
-# Skips the build when the cached source is already at $IGNITION_COMMIT and
-# the artifacts exist.
-build_ignition() {
-    local out="$IGNITION_SRC/build/Ignition-Linux-Windows"
-    local have=0
-    [ -f "$out/libdriver_ignition.so" ] && [ -f "$out/ignition_server.exe" ] && [ -f "$out/ignition_bridge.dll" ] && have=1
-
-    if [ ! -d "$IGNITION_SRC/.git" ]; then
-        say "Cloning Ignition source…"
-        git clone "$IGNITION_URL" "$IGNITION_SRC"
-    fi
-
-    # Rebuild if artifacts are missing or the cached source isn't at the
-    # pinned commit.
-    local dirty=0
-    ( cd "$IGNITION_SRC" && git fetch --tags origin >/dev/null 2>&1 ) || dirty=1
-    local local_head
-    local_head=$(git -C "$IGNITION_SRC" rev-parse HEAD 2>/dev/null)
-    if [ -z "$local_head" ] || [ "$local_head" != "$IGNITION_COMMIT" ]; then
-        dirty=1
-    fi
-    if [ "$have" = 1 ] && [ "$dirty" = 0 ] && [ -z "$BUILD_FORCE" ]; then
-        return 0    # already built at the pinned commit
-    fi
-
-    # We're actually going to build - make sure the toolchain + SDK are present.
-    ensure_build_toolchain
-
-    if [ "$dirty" = 1 ] && [ "$have" = 1 ]; then
-        say "Ignition source not at $IGNITION_COMMIT - rebuilding…"
-    fi
-
-    say "Building Ignition from source at $IGNITION_COMMIT (this can take several minutes)…"
-    # Run in background and report progress: the raw build log streams to
-    # LOG_FILE, and every 15 s the last log line plus elapsed time is shown
-    # so a long compile never looks hung.
-    ( cd "$IGNITION_SRC" \
-        && ( git cat-file -e "$IGNITION_COMMIT^{commit}" 2>/dev/null \
-             || git fetch --depth 1 origin "$IGNITION_COMMIT" ) \
-        && git checkout -f "$IGNITION_COMMIT" \
-        && git reset --hard "$IGNITION_COMMIT" \
-        && for p in "$REPO"/build/patches/*.patch; do
-               [ -f "$p" ] || continue
-               echo "applying $(basename "$p")"
-               git apply "$p" 2>"$LOG_FILE" \
-                   || { echo "local source change failed to apply - update $p"; exit 1; }
-           done \
-        && cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
-        && cmake --build build ) >>"$LOG_FILE" 2>&1 &
-    local build_pid=$!
-    local waited=0 lastline=""
-    while kill -0 "$build_pid" 2>/dev/null; do
-        sleep 15
-        waited=$((waited + 15))
-        lastline=$(grep -v '^$' "$LOG_FILE" 2>/dev/null | tail -1 | cut -c1-100)
-        if [ -n "$lastline" ]; then
-            printf '  build %ss: %s\n' "$waited" "$lastline"
-        else
-            printf '  build %ss: still running…\n' "$waited"
-        fi
-    done
-    wait "$build_pid" \
-        || die "--build-from-source: Ignition build failed (full output in $LOG_FILE)"
-
-    [ -f "$out/libdriver_ignition.so" ] && [ -f "$out/ignition_server.exe" ] && [ -f "$out/ignition_bridge.dll" ] \
-        || die "--build-from-source: built artifacts missing at $out"
-}
-
-# build_shims - cross-compile vr_bootstrap.exe and vrpathreg2.exe from the C
-# sources in build/ using xwin. Outputs are cached in
-# ~/.cache/standable-ignition/shims/ and only rebuilt when the source is newer.
-# Sets SHIM_DIR to the directory containing the usable .exe files.
-SHIM_CACHE="$HOME/.cache/standable-ignition/shims"
-SHIM_DIR=""
-build_shims() {
-    mkdir -p "$SHIM_CACHE"
-    local src_bc="$REPO/build/vr_bootstrap.c"
-    local src_rc="$REPO/build/vrpathreg2.c"
-    local out_bc="$SHIM_CACHE/vr_bootstrap.exe"
-    local out_rc="$SHIM_CACHE/vrpathreg2.exe"
-    local need=0
-    [ -z "$BUILD_FORCE" ] || need=1
-    [ "$need" = 1 ] || [ ! -f "$out_bc" ] || [ "$src_bc" -nt "$out_bc" ] && need=1
-    [ "$need" = 1 ] || [ ! -f "$out_rc" ] || [ "$src_rc" -nt "$out_rc" ] && need=1
-    if [ "$need" = 1 ]; then
-        say "Building VR shims from source (vr_bootstrap + vrpathreg2)…"
-        local xwin="$HOME/.xwin-cache/splat"
-        local inc_flags="-I$xwin/crt/include -I$xwin/sdk/include/ucrt -I$xwin/sdk/include/um -I$xwin/sdk/include/shared"
-        local lib_flags="-Wl,/LIBPATH:$xwin/crt/lib/x86_64 -Wl,/LIBPATH:$xwin/sdk/lib/um/x86_64 -Wl,/LIBPATH:$xwin/sdk/lib/ucrt/x86_64 -lkernel32 -luser32 -ladvapi32 -lshell32 -llibcmt -llibucrt -loldnames"
-        clang --target=x86_64-pc-windows-msvc -fuse-ld=lld-link -DWIN32_LEAN_AND_MEAN \
-            $inc_flags "$src_bc" -o "$out_bc" $lib_flags >>"$LOG_FILE" 2>&1 \
-            || die "build_shims: vr_bootstrap.exe failed (see $LOG_FILE)"
-        clang --target=x86_64-pc-windows-msvc -fuse-ld=lld-link -DWIN32_LEAN_AND_MEAN \
-            $inc_flags "$src_rc" -o "$out_rc" $lib_flags >>"$LOG_FILE" 2>&1 \
-            || die "build_shims: vrpathreg2.exe failed (see $LOG_FILE)"
-    fi
-    SHIM_DIR="$SHIM_CACHE"
-}
-
-# resolve_shims - pick vendored or freshly-built shim binaries (.exe).
-# Sets SHIM_DIR to the directory containing vr_bootstrap.exe + vrpathreg2.exe.
-resolve_shims() {
-    if [ -n "$BUILD_FROM_SOURCE" ]; then
-        build_shims
-    else
-        SHIM_DIR="$REPO/build"
-    fi
-    [ -f "$SHIM_DIR/vr_bootstrap.exe" ] && [ -f "$SHIM_DIR/vrpathreg2.exe" ] \
-        || die "vr_bootstrap.exe / vrpathreg2.exe missing from $SHIM_DIR"
-}
-
-# resolve_ignition - pick source that actually produces the 3 shim binaries.
-# Prefers a local source build (only when --build-from-source), else vendor/.
-resolve_ignition() {
-    if [ -n "$BUILD_FROM_SOURCE" ]; then
-        build_ignition
-        local out="$IGNITION_SRC/build/Ignition-Linux-Windows"
-        IGN_LINUX64="$out"
-    else
-        IGN_LINUX64="$REPO/vendor"
-    fi
-    for v in libdriver_ignition.so ignition_server.exe ignition_bridge.dll; do
-        [ -f "$IGN_LINUX64/$v" ] || die "$v missing ($IGN_LINUX64)"
-    done
-    resolve_shims
-}
-
-# resolve_reg - PSVR2 hidraw registry file is vendored in config/, but when
-# building Ignition from source we use the fresh copy from its support/ so it
-# stays in lockstep with upstream. Sets IGN_PSVR2_REG.
-resolve_reg() {
-    if [ -n "$BUILD_FROM_SOURCE" ] && [ -f "$IGN_LINUX64/wine_psvr2_hidraw.reg" ]; then
-        IGN_PSVR2_REG="$IGN_LINUX64/wine_psvr2_hidraw.reg"
-    else
-        IGN_PSVR2_REG="$REPO/config/wine_psvr2_hidraw.reg"
-    fi
-    [ -f "$IGN_PSVR2_REG" ] || die "wine_psvr2_hidraw.reg missing ($IGN_PSVR2_REG)"
-}
-
-# steam_api64_ok - is this a usable Steamworks runtime? The real DLL is a few
-# hundred KB; Standable ships a tiny (4 KB) stub in bin/win64/. Copying that
-# stub over the real one makes ignition_server.exe fail to load the Windows
-# driver, so the handshake never completes and SteamVR aborts with a ~21 s
-# watchdog timeout / 105 / safe-mode loop. Size is the cheap discriminator
-# (>=100 KB); the PE header is a second sanity check. The vendored SDK 1.60
-# copy is the SHA-256 1add7f15... documented below.
-steam_api64_ok() {
-    local f="$1"
-    [ -f "$f" ] || return 1
-    [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -ge 100000 ] || return 1
-    [ "$(head -c 2 "$f" 2>/dev/null)" = "MZ" ] || return 1
-    return 0
-}
-
-# resolve_steam_api64 - pick the source for steam_api64.dll (the driver's
-# Steamworks runtime). Prefer the game's own build, but only if it's a real
-# DLL - a stub there must not shadow the vendored copy. The vendored copy is
-# the Steamworks SDK 1.60 redistributable (SHA-256
-# 1add7f151fa644870a735ae86e68d1f019f296130d8e7c0a7ed3ecc7482dccbc), same file
-# every Steamworks game ships. No runtime download needed.
-SA64_SRC=""
-resolve_steam_api64() {
-    if steam_api64_ok "$GAME_DIR/bin/win64/steam_api64.dll"; then
-        SA64_SRC="$GAME_DIR/bin/win64/steam_api64.dll"
-        say "using game's own steam_api64.dll"
-    else
-        if [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
-            warn "game's bin/win64/steam_api64.dll is a stub ($(stat -c %s "$GAME_DIR/bin/win64/steam_api64.dll" 2>/dev/null) bytes) - using vendor copy"
-        fi
-        SA64_SRC="$REPO/vendor/steam_api64.dll"
-    fi
-    [ -f "$SA64_SRC" ] || die "steam_api64.dll source missing ($SA64_SRC)"
-}
+# ---------------------------------------------------------------- flags --
+UNINSTALL=""
+ASSUME_YES=""
+LOG_FILE=""
+DRY_RUN=""
+for a in "$@"; do
+    case "$a" in
+        --uninstall|uninstall|remove) UNINSTALL=1 ;;
+        --assume-yes|-y) ASSUME_YES=1 ;;
+        --dry-run|-n) DRY_RUN=1 ;;
+        --log) LOG_FILE="PENDING" ;;
+        --verbose|-v) set -x ;;
+        *) [ "$LOG_FILE" = "PENDING" ] && LOG_FILE="$a" ;;
+    esac
+done
+[ "$LOG_FILE" = "PENDING" ] && die "--log requires a file path"
+LOG_FILE="${LOG_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/standable/uninstall.log}"
+mkdir -p "$(dirname "$LOG_FILE")"
+: > "$LOG_FILE"
+_log "=== standable uninstall log - $(date -Iseconds) ==="
+_log "argv: $0 $*"
 
 # ---------------------------------------------------------------- detection --
 detect_steam_root() {
@@ -346,8 +65,8 @@ detect_steam_root() {
 
 detect_game_dir() {
     # default library, then every library in libraryfolders.vdf. A library only
-    # counts if Steam's appmanifest for this game is present there - an orphaned
-    # leftover dir (e.g. after a move/update) with no manifest is NOT the game.
+    # counts if Steam's appmanifest for Standable is present there - an orphaned
+    # leftover dir (e.g. after a move/update) with no manifest is NOT Standable.
     local libs=("$STEAM_ROOT")
     if [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ]; then
         while IFS= read -r p; do
@@ -362,894 +81,213 @@ detect_game_dir() {
     return 1
 }
 
-find_proton_builds() {
-    # prints "label|path" candidates; host-launchable proton scripts only.
-    # Protons can live on any Steam library drive (compatibilitytools.d or a
-    # built-in under steamapps/common), not just the default root - scan them
-    # all via libraryfolders.vdf, plus the system-wide /usr/share installs.
-    local d p libs
-    libs=("$STEAM_ROOT")
-    [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ] && {
-        while IFS= read -r l; do [ -n "$l" ] && libs+=("$l"); done \
-            < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
-    }
-    for lib in "${libs[@]}"; do
-        # NOTE: built-ins are "Proton 10.0" (no dash) as well as
-        # "Proton - Experimental" - "Proton -*" alone misses versioned builds.
-        for d in "$lib/compatibilitytools.d"/* "$lib"/steamapps/common/Proton*; do
-            p="$d/proton"
-            [ -x "$p" ] && [ -d "$d/files/lib/wine" ] && printf '%s|%s\n' "$(basename "$d")" "$p"
-        done
-    done
-    for d in /usr/share/steam/compatibilitytools.d/*; do
-        p="$d/proton"
-        [ -x "$p" ] && [ -d "$d/files/lib/wine" ] && printf '%s|%s\n' "$(basename "$d")" "$p"
-    done
-}
-
-# steam_forced_proton - read the compat tool Steam has forced on the game's
-# appid from config.vdf (CompatToolMapping). Returns the Proton binary path or
-# empty. Shared resolver (templates/proton_resolve.sh.in): prefix bookkeeping
-# is skipped here (compat dir not known yet at pick time), config.vdf matching
-# applies, no fallback.
-. "$REPO/templates/proton_resolve.sh.in"
-steam_forced_proton() {
-    local r
-    r=$(proton_resolve "" "$STEAM_ROOT" "$APP_ID" "" 2>/dev/null) || return 1
-    [ -n "$r" ] || return 1
-    echo "$r"
-}
-
-pick_proton() {
-    if [ -n "$PROTON_OVERRIDE" ] && [ "$PROTON_OVERRIDE" != "PENDING" ]; then
-        # accept directory (append /proton) or path to proton binary
-        [ -d "$PROTON_OVERRIDE" ] && [ -x "$PROTON_OVERRIDE/proton" ] && PROTON_OVERRIDE="$PROTON_OVERRIDE/proton"
-        [ -x "$PROTON_OVERRIDE" ] || die "--proton: not executable: $PROTON_OVERRIDE"
-        PROTON="$PROTON_OVERRIDE"; return 0
-    fi
-    # Use whatever Proton Steam has forced on the game, so driver and game can't
-    # mismatch. Re-checked on every driver boot too (proton_resolve.sh, shared
-    # with the launch hook), so switching in Steam's UI needs no reinstall.
-    # except config.vdf is flushed on Steam exit, so a fresh switch may lag one
-    # Steam restart; install while Steam runs can therefore read a stale value.
-    local forced
-    forced=$(steam_forced_proton)
-    if [ -n "$forced" ]; then
-        say "using Steam-forced Proton for $APP_ID: $(basename "$(dirname "$forced")")"
-        PROTON="$forced"; return 0
-    fi
-    # Preserve the existing proton choice if the scripts already work.
-    # Silently switching builds breaks gamedrive conventions and s: links.
-    local existing=""
-    for f in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"; do
-        [ -f "$f" ] || continue
-        existing=$(grep '^PROTON=' "$f" 2>/dev/null | head -1 | sed 's/^PROTON="//;s/"$//;s/^PROTON=//')
-        # must be a regular file (not a directory) and executable
-        [ -n "$existing" ] && [ -f "$existing" ] && [ -x "$existing" ] && { PROTON="$existing"; return 0; }
-    done
-    mapfile -t CANDS < <(find_proton_builds)
-    [ ${#CANDS[@]} -gt 0 ] || die "no Proton builds found. Install one (Steam built-in Proton, Proton-GE, ...), or pass --proton /path/to/proton."
-    # prefer Steam's own bundled Proton, else interactive pick, else first
-    local c
-    for c in "${CANDS[@]}"; do
-        case "$c" in *"steamapps/common/Proton"*) PROTON="${c#*|}"; return 0;; esac
-    done
-    if [ -t 0 ] && [ ${#CANDS[@]} -gt 1 ]; then
-        echo "Multiple Proton builds found:"
-        select c in "${CANDS[@]}"; do [ -n "$c" ] && break; done
-        PROTON="${c#*|}"; return 0
-    fi
-    PROTON="${CANDS[0]#*|}"
-    # sanity: if PROTON is a directory, append /proton
-    [ -d "$PROTON" ] && [ -x "$PROTON/proton" ] && PROTON="$PROTON/proton"
-}
-
-# clear_stale_services - install-time sweep. Deliberately NOT the shared
-# sweep.sh: this one also reaps the game exe/wineboot/winedevice with user
-# messaging, while sweep.sh is the quiet boot-time foreign-only guard shared
-# by the hook and the driver shim.
-# clear_stale_services - when switching Proton builds the OLD build's wineserver
-# (and the game/driver it hosts) keeps running and blocks the new one: Steam's
-# "Play" appears to do nothing because the app is considered already running /
-# the new wineserver can't take over the prefix. Kill anything still hosted by
-# the previous (now-unselected) Proton's wineserver so the switch takes effect
-# cleanly. Same-class fix as the GE version-mismatch hang.
-clear_stale_services() {
-    local newname oldname pid cmd penv
-    newname=$(basename "$PROTON")
-    [ "$newname" = "proton" ] && newname=$(basename "$(dirname "$PROTON")")
-    local killed=0
-    # ps -o args= yields the full command (may contain spaces); first field is pid
-    while read -r pid __rest; do
-        case "$__rest" in *wineserver*|*wineboot*|*winedevice*|*xalia*|*ignition_server*|*Standable.exe*) ;; *) continue;; esac
-        cmd="$__rest"
-        oldname=$(printf '%s' "$cmd" | sed -nE 's#.*compatibilitytools\.d/([^/]+)/.*#\1#p')
-        [ -n "$oldname" ] || oldname=$(printf '%s' "$cmd" | sed -nE 's#.*steamapps/common/(Proton[^/]*)/.*#\1#p')
-        # steam.exe/ignition_server.exe children don't embed the Proton path;
-        # fall back to environ, matching ONLY proton build dirs (never the
-        # game dir - same fix as the launch-hook sweep).
-        if [ -z "$oldname" ] && [ -r "/proc/$pid/environ" ]; then
-            oldname=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
-                | grep -Eo 'compatibilitytools\.d/[^/]+|steamapps/common/Proton[^/]*' \
-                | head -1 | sed -E 's#.*/##')
-        fi
-        [ -n "$oldname" ] || continue
-        [ "$oldname" = "$newname" ] && continue
-        # only our own prefix: another game using the old build must not be
-        # disrupted. Fail closed - if the environ can't be read we can't confirm
-        # it's ours, so leave it alone (killing blindly risks an unrelated app).
-        [ -r "/proc/$pid/environ" ] || continue
-        penv=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep "STEAM_COMPAT_DATA_PATH=.*compatdata/$APP_ID" || true)
-        [ -n "$penv" ] || continue
-        say "stale $oldname process in our prefix - killing (switch to $newname)"
-        kill -9 "$pid" 2>/dev/null && killed=1
-    done < <(ps -eo pid=,args= 2>/dev/null)
-    if [ "$killed" = 1 ]; then
-        say "stale Proton services cleared - restart SteamVR before launching, the driver only loads the new build on a fresh boot."
-    fi
-}
-
 pick_prefix() {
-    # the Proton prefix lives next to the game in its own Steam library
-    # (steamapps/compatdata/<APP_ID>), which for a secondary drive is NOT the
-    # default Steam root. Fall back to the default root if the game library
-    # hasn't been located yet (e.g. in --check before detect_game_dir runs).
+    # the Proton prefix lives next to Standable in its own Steam library
     local GIRO="${GAME_LIB:-$STEAM_ROOT}"
     COMPAT="$GIRO/steamapps/compatdata/$APP_ID"
     PFX="$COMPAT/pfx"
 }
 
-# ------------------------------------------------------------- VRChat link ---
-# Standable's auto-calibration ("VRChat" / "OSC" feature) works by having
-# driver_standable.dll read VRChat's IK-debug log from
-#   %UserProfile%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt
-# (it regex-parses "Changed player height ... tracking scale ..." and
-# "eyeToNeck:(...) scaled:(...)" lines; confirmed against the driver's
-# WS2_32/ExpandEnvironmentStringsW/FindFirstFileW imports and the UTF-16 path
-# string near the AutoCalibration region). VRChat runs in its OWN Proton prefix
-# (AppID 438100), so inside the Standable prefix that path is empty. We symlink
-# VRChat's LocalLow data into the Standable prefix so the driver can see
-# VRChat's live IK log.
-VRC_APP_ID=438100
-detect_vrchat_prefix() {
-    # locate VRChat's Proton prefix across all Steam libraries (any drive).
-    local libs=("$STEAM_ROOT")
-    [ -f "$STEAM_ROOT/steamapps/libraryfolders.vdf" ] && {
-        while IFS= read -r p; do
-            [ -n "$p" ] && libs+=("$p")
-        done < <(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf")
-    }
-    VRC_COMPAT=""
-    local lib
-    for lib in "${libs[@]}"; do
-        if [ -d "$lib/steamapps/compatdata/$VRC_APP_ID" ]; then
-            VRC_COMPAT="$lib/steamapps/compatdata/$VRC_APP_ID"; return 0
-        fi
-    done
-    return 1
-}
+STEAM_ROOT=""
+GAME_DIR=""
+GAME_LIB=""
+COMPAT=""
+PFX=""
+WIN64=""
 
-# host path of VRChat's LocalLow data (empty if not installed / prefix not made)
-vrchat_low() {
-    [ -n "${VRC_COMPAT:-}" ] || return 0
-    printf '%s/pfx/drive_c/users/steamuser/AppData/LocalLow/VRChat' "$VRC_COMPAT"
-}
+if [ "$UNINSTALL" != "1" ]; then
+    cat <<'EOF'
+Standable now supports Linux officially, so this patch is retired.
 
-setup_vrchat_link() {
-    local src; src="$(vrchat_low)"
-    local dst="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
-    if [ -z "$src" ] || [ ! -d "$src" ]; then
-        return 0    # nothing to link yet
-    fi
-    # Don't clobber a real directory someone created deliberately.
-    if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-        warn "Leaving $dst alone (real dir/link); remove it to let the port manage it"
-        return 0
-    fi
-    run mkdir -p "$(dirname "$dst")"
-    run ln -sfn "$src" "$dst"
-    say "Linked VRChat LocalLow into Standable prefix for auto-calibration."
-}
+Nothing needs to be installed. Install Standable from Steam and launch it
+normally. The official build has a native SteamVR driver and runs the
+Standable GUI through Proton.
 
-# ------------------------------------------------------------------- checks --
-require() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed."; }
+To move to the official build, remove the old patch with:
 
-# ---------------------------------------------------- flags (--proton etc.) --
-ORIG_ARGS=("$@")
-BUILD_FROM_SOURCE=""
-BUILD_FORCE=""
-PROTON_OVERRIDE=""
-ASSUME_YES=""
-LOG_FILE=""
-DIAGNOSE=""
-DRY_RUN=""
-NO_SAFEMODE=""
-ARGS=()
-for a in "$@"; do
-    case "$a" in
-        --build|--rebuild|--build-from-source) BUILD_FROM_SOURCE=1 ;;
-        --force|-f) BUILD_FORCE=1 ;;
-        --proton) PROTON_OVERRIDE="PENDING" ;;
-        --assume-yes|-y) ASSUME_YES=1 ;;
-        --log) LOG_FILE="PENDING" ;;
-        --diagnose) DIAGNOSE=1 ;;
-        --dry-run|-n) DRY_RUN=1 ;;
-        --no-safemode) NO_SAFEMODE=1 ;;
-        --install) : ;;                 # explicit default (also run when omitted)
-        --verbose|-v) set -x ;;
-        *)
-            if [ "$PROTON_OVERRIDE" = "PENDING" ]; then PROTON_OVERRIDE="$a"
-            elif [ "$LOG_FILE" = "PENDING" ]; then LOG_FILE="$a"
-            else ARGS+=("$a"); fi
-            ;;
-    esac
-done
-set -- ${ARGS[@]+"${ARGS[@]}"}
-if [ -n "$LOG_FILE" ] && [ "$LOG_FILE" = "PENDING" ]; then
-    die "--log requires a file path (e.g. --log standable-install.log)"
-fi
-# Logging is always on: every run writes a full transcript (say/warn/die plus
-# toolchain & build command output). --log overrides the location.
-LOG_FILE="${LOG_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/standable/install.log}"
-mkdir -p "$(dirname "$LOG_FILE")"
-: > "$LOG_FILE"   # fresh transcript per run
-_log "=== standable install log - $(date -Iseconds) ==="
-_log "argv: $0 ${ORIG_ARGS[*]}"
-_log "pwd: $PWD  user: $(id -un)  kernel: $(uname -r)"
+  ./install.sh --uninstall
 
-# ================================================================== DOCTOR ==
-if [ "${1:-}" = "--check" ] || [ -n "$DIAGNOSE" ]; then
-    # --check now always dumps full system info to the log (used to be the
-    # separate --diagnose flag). --diagnose is kept as an alias for compat.
-    detect_steam_root || die "Steam root not found"
-    if detect_game_dir; then
-        GAME_FOUND=1
-        S_ROOT="${GAME_LIB:-$STEAM_ROOT}"
-    else
-        GAME_FOUND=0
-        S_ROOT="$STEAM_ROOT"
-    fi
-    pick_prefix
-    detect_vrchat_prefix || true
-    PROTON=""
-    for f in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"; do
-        [ -f "$f" ] || continue
-        PROTON=$(grep '^PROTON=' "$f" 2>/dev/null | head -1 | sed 's/^PROTON="//;s/"$//;s/^PROTON=//')
-        [ -n "$PROTON" ] && [ -f "$PROTON" ] && break
-    done
-    fail=0
-    ok(){ say "OK  $1"; }
-    bad(){ warn "FAIL $1"; fail=1; }
-    # SteamVR version + branch: "worked yesterday, broke today" across users is
-    # often a SteamVR-side update. Surface it so a version correlation is
-    # visible without digging into --diagnose.
-    _vrver=$(python3 -c "import json; print(json.load(open('$STEAM_ROOT/config/steamvr.vrsettings')).get('steamvr',{}).get('lastVersionNotice',''))" 2>/dev/null)
-    if [ -n "$_vrver" ]; then
-        _vrbranch="stable"
-        [ -f "$STEAM_ROOT/package/beta" ] && grep -qi "publicbeta" "$STEAM_ROOT/package/beta" 2>/dev/null && _vrbranch="beta"
-        say "SteamVR $_vrver ($_vrbranch)"
-    fi
-    [ -f "$PFX/drive_c/vr_bootstrap.exe" ] && ok "vr_bootstrap.exe deployed" || bad "vr_bootstrap.exe missing"
-    [ -f "$PFX/drive_c/vrclient/bin/vrclient_x64.dll" ] && ok "vrclient copy present" || bad "vrclient copy missing"
-    VRPATH="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64/vrpathreg.exe"
-    [ -f "$VRPATH" ] && ok "vrpathreg stub present" || bad "vrpathreg stub missing"
-    grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null && ok "SteamPath registry set" || bad "SteamPath registry missing"
-    [ -L "$PFX/dosdevices/s:" ] && ok "s: dosdevice link alive" || bad "s: link missing (recreated on next launch)"
-    # s: must point at the LIBRARY that holds the game (secondary libraries need
-    # S_ROOT, not the default Steam root); a wrong target breaks the driver's
-    # CWD->s: mapping and makes the handshake fail -> SteamVR disables the driver.
-    if [ -L "$PFX/dosdevices/s:" ]; then
-        STGT="$S_ROOT"
-        if [ -n "$PROTON" ] && [ -f "$PROTON" ] \
-           && ! grep -q 'get_validated_steamapps_parent' "$(dirname "$PROTON")/proton" 2>/dev/null; then
-            STGT="$S_ROOT/steamapps"
-        fi
-        SLINK_TGT="$(readlink "$PFX/dosdevices/s:")"
-        if [ "$SLINK_TGT" = "$STGT" ]; then
-            ok "s: maps to game library ($STGT)"
-        else
-            warn "s: maps to '$SLINK_TGT' but game library is '$STGT' (fix with install.sh)"
-            fail=1
-        fi
-    fi
-    # SteamVR persistently disables drivers that fail/abort at load ("Not loading
-    # driver X because it is disabled in settings"). Look for that flag so users
-    # aren't stuck in a re-enable/disable loop.
-    CFG="$STEAM_ROOT/config/steamvr.vrsettings"
-    if grep -q '"driver_standable"' "$CFG" 2>/dev/null; then
-        if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("driver_standable",{}).get("enable",True) is False else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
-            bad "SteamVR has disabled the standable driver (re-enable via install.sh or Settings/Developer)"
-        else
-            ok "standable driver not disabled in SteamVR settings"
-        fi
-    else
-        ok "standable driver not disabled in SteamVR settings"
-    fi
-    # SteamVR safe mode loads only the whitelist (safe_mode_driver_whitelist.json);
-    # standable is NOT on it, so a safe-mode session will silently skip the driver.
-    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("steamvr",{}).get("enableSafeMode",False) else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
-        warn "SteamVR SAFE MODE is on - standable is not whitelisted and won't load (clear safe mode in SteamVR Settings)"
-        fail=1
-    else
-        ok "SteamVR safe mode off"
-    fi
-    # A crash leaves markers that suppress the driver on the NEXT boot even
-    # with safe mode off ("blocked by a previous safe mode event"). The
-    # driver's own launch script clears them, but it only runs when the
-    # driver loads - a blocked driver never clears itself. Report it here so
-    # the loop can be broken with a re-install.
-    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("driver_standable",{}).get("blocked_by_safe_mode") else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
-        bad "driver blocked by a previous safe mode event - won't load next SteamVR boot. Re-run ./standable install (or launch the game once via the hook), then restart SteamVR"
-        fail=1
-    fi
-    if [ -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt" ]; then
-        bad "vrserver crash timestamp present - SteamVR will treat the next boot as a repeat of the last abort. Re-run ./standable install"
-        fail=1
-    fi
-    # Linux SteamVR 307: "A key component of SteamVR isn't working" often
-    # relates to enableLinuxVulkanAsync on Wayland compositors.
-    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("bad" if d.get("steamvr",{}).get("enableLinuxVulkanAsync",False) else "ok")' "$CFG" 2>/dev/null | grep -q bad; then
-        warn "enableLinuxVulkanAsync is on in steamvr.vrsettings - known cause of SteamVR 307 on Wayland (set false or use X11 session)"
-    else
-        ok "enableLinuxVulkanAsync off"
-    fi
-    if [ -n "${VRC_COMPAT:-}" ]; then
-        VRCLOW="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
-        SRCLOW="$(vrchat_low)"
-        if [ -L "$VRCLOW" ] && [ -d "$SRCLOW" ]; then
-            ok "VRChat LocalLow linked into Standable prefix (auto-calibration log)"
-        else
-            bad "VRChat log link missing - run install to enable auto-calibration"
-        fi
-    else
-        warn "VRChat not found - auto-calibration requires it to be installed"
-    fi
-    # VRChat OSC is OFF by default. Standable sends its IK-debug-logging and
-    # one-handed-calibration params over OSC, so auto-calibration silently does
-    # nothing until the user enables it in VRChat's Action Menu.
-    if [ -n "${VRC_COMPAT:-}" ] && [ -f "$VRC_COMPAT/pfx/user.reg" ]; then
-        if grep -aq 'VRC_INPUT_OSC_h[0-9]*"=dword:00000001' "$VRC_COMPAT/pfx/user.reg"; then
-            ok "VRChat OSC enabled (auto-calibration can set its IK params)"
-        else
-            warn "VRChat OSC is OFF - Action Menu > OSC > Enabled (auto-calibration needs it)"
-        fi
-    fi
-    grep -aq "Standable" "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null \
-        && ok "seed entry in ~/.config/openvr/openvrpaths.vrpath" || bad "seed entry missing"
-    # The S:\-form seed entry is what silences the game's per-boot "driver
-    # path is missing" dialog (Proton copies this file into the prefix each
-    # launch and the game checks it with a raw Win32 test). Cosmetic only -
-    # the driver loads regardless - so warn, don't fail.
-    if [ "$GAME_FOUND" = 1 ]; then
-        _STGT="$S_ROOT"
-        if [ -n "$PROTON" ] && [ -f "$PROTON" ] \
-           && ! grep -q 'get_validated_steamapps_parent' "$(dirname "$PROTON")/proton" 2>/dev/null; then
-            _STGT="$S_ROOT/steamapps"
-        fi
-        _SSTATE=$(python3 - "$GAME_DIR" "$_STGT" <<'PY' 2>/dev/null
-import json, os, sys
-game_dir, s_target = sys.argv[1], sys.argv[2]
-try:
-    rel = os.path.relpath(game_dir, s_target)
-except Exception:
-    rel = None
-expected = ('S:\\' + rel.replace('/', '\\')) if rel and not rel.startswith('..') else None
-try:
-    ed = json.load(open(os.path.expanduser('~/.config/openvr/openvrpaths.vrpath'))).get('external_drivers') or []
-except Exception:
-    ed = []
-print('ok' if expected and expected in ed else 'missing')
-PY
-)
-        if [ "$_SSTATE" = "ok" ]; then
-            ok "S:\\ driver-path seed present (game's per-boot path check passes)"
-        else
-            warn "S:\\ driver-path seed missing - expect the game's per-boot 'driver path is missing' dialog (cosmetic); re-run install"
-        fi
-        unset _STGT _SSTATE
-    fi
-    # Launch hook lives in ~/.local/bin (XDG, hidden); older installs used
-    # ~/bin - accept either so existing Steam launch options keep working.
-    _hook=""
-    for _h in "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/bin/standable_launch_hook.sh"; do
-        [ -x "$_h" ] && { _hook="$_h"; break; }
-    done
-    if [ -n "$_hook" ]; then
-        ok "standable_launch_hook.sh installed ($_hook)"
-        case "$_hook" in
-            "$HOME/bin/"*) warn "hook still at old ~/bin path - update Steam Launch Options to: bash \$HOME/.local/bin/standable_launch_hook.sh %command%" ;;
-        esac
-        # A stale hook (pre-host-context) still exists+is executable, but chains
-        # %command% or runs the old direct path wrong - desktop GUI never shows.
-        # Verify it's the current host-context launcher.
-        if grep -q 'exec "\$PROTON" run "\$GAME_DIR/Standable.exe"' "$_hook" \
-           || grep -q '"$PROTON" run "$GAME_DIR/Standable.exe"' "$_hook"; then
-            ok "launch hook is the host-context (desktop GUI) version"
-        else
-            bad "launch hook is stale (not host-context) - re-run ./standable install, desktop GUI won't show"
-        fi
-    else
-        bad "Steam launch hook missing"
-    fi
-    if [ "$GAME_FOUND" = 1 ]; then
-        # Must be a real DLL in BOTH places, not just present: Standable ships
-        # a 4 KB stub in bin/win64/, and a stub copied over the real runtime
-        # makes the Windows driver fail to load (105 -> ~21 s watchdog abort
-        # -> safe-mode block loop). Detect it here instead of at SteamVR boot.
-        if steam_api64_ok "$GAME_DIR/bin/linux64/steam_api64.dll" && steam_api64_ok "$GAME_DIR/bin/win64/steam_api64.dll"; then
-            ok "steam_api64.dll deployed (driver's Steamworks dep, linux64+win64)"
-        elif [ -f "$GAME_DIR/bin/linux64/steam_api64.dll" ] && [ -f "$GAME_DIR/bin/win64/steam_api64.dll" ]; then
-            bad "steam_api64.dll is a stub ($(stat -c %s "$GAME_DIR/bin/win64/steam_api64.dll" 2>/dev/null) bytes), not the real SDK - driver can't load (105). Re-run ./standable install"
-        else
-            bad "steam_api64.dll missing - re-run install, SteamVR crashes on driver load"
-        fi
-        if [ -x "$GAME_DIR/bin/linux64/python3" ]; then
-            # Actually exercise the shim: Proton dies on startup if it can't
-            # resolve a python with typing.Self (Sniper sandbox ships 3.9).
-            # "deployed" ≠ "works" - run it so a broken interpreter selection
-            # is caught here, not as a ~21s load_drivers watchdog later.
-            if "$GAME_DIR/bin/linux64/python3" -c 'from typing import Self' >/dev/null 2>&1; then
-                ok "python3 shim resolves a working interpreter (typing.Self)"
-            else
-                # Find what's actually missing so the fix is precise, not a
-                # generic "install something".
-                if ! command -v python3 >/dev/null 2>&1; then
-                    warn "host has no python3 - install one or Steam Linux Runtime 4.0"
-                elif ! python3 -c 'from typing import Self' >/dev/null 2>&1; then
-                    warn "host python3 lacks typing.Self - needs Steam Linux Runtime 4.0's python3.13"
-                fi
-                local _rt4py=""
-                for _rt4 in "$STEAM_ROOT"/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files/bin/python3.13; do
-                    [ -x "$_rt4" ] && { _rt4py="$_rt4"; break; }
-                done
-                if [ -n "$_rt4py" ]; then
-                    warn "Steam Linux Runtime 4.0 present but its python3.13 wasn't reached - shim logic issue"
-                else
-                    bad "Steam Linux Runtime 4.0 missing (provides python3.13 the shim needs)"
-                    # Offer the fix: trigger the install through Steam if it's
-                    # running, else tell the user the command.
-                    if pgrep -f 'steam\.sh' >/dev/null 2>&1; then
-                        warn "triggering Steam install of Steam Linux Runtime 4.0 (appid 4183110)…"
-                        ( steam steam://install/4183110 >/dev/null 2>&1 & )
-                        warn "after it finishes, re-run ./standable check"
-                    else
-                        warn "fix: install Steam Linux Runtime 4.0, e.g. 'steam steam://install/4183110'"
-                    fi
-                fi
-            fi
-        else
-            bad "python3 shim missing - re-run install, Proton dies on typing.Self ImportError"
-        fi
-        [ -f "$GAME_DIR/bin/linux64/proton_resolve.sh" ] \
-            && ok "proton_resolve.sh deployed (runtime Proton switching)" \
-            || bad "proton_resolve.sh missing - re-run install, Proton switches need reinstalls"
-        [ -f "$GAME_DIR/bin/linux64/sweep.sh" ] \
-            && ok "sweep.sh deployed (shared stale-wineserver sweep)" \
-            || bad "sweep.sh missing - re-run install, hook/driver fall back to no sweep"
-        [ -f "$GAME_DIR/bin/linux64/win_vrpath.sh" ] \
-            && ok "win_vrpath.sh deployed (Windows-side driver path repair)" \
-            || bad "win_vrpath.sh missing - re-run install"
-        _WINVR="$PFX/drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath"
-        # Proton restores the Linux-path entry on every launch, so its mere
-        # presence is permanent, not stale. What the game's check needs is a
-        # Wine-resolvable (S:\) entry alongside it - verified against the
-        # game's own Fix It button, which appends exactly that form.
-        _WINSTATE=$(python3 - "$_WINVR" <<'PY' 2>/dev/null
-import json, sys
-try:
-    ed = json.load(open(sys.argv[1])).get('external_drivers') or []
-except Exception:
-    print('missing'); raise SystemExit(0)
-win_ok = [e for e in ed if 'Standable' in e and 'S:' in e.upper()]
-linux_only = [e for e in ed if 'Standable' in e and e.startswith('/')]
-print('ok' if win_ok else ('linux-only' if linux_only else 'missing'))
-PY
-)
-        if [ "$_WINSTATE" = "ok" ]; then
-            ok "Windows-side driver path registered"
-        elif [ "$_WINSTATE" = "linux-only" ]; then
-            warn "Windows-side driver path has no Wine-resolvable entry - game will show its path dialog; repaired on next game/driver boot"
-        else
-            warn "Windows-side driver path not registered - repaired on next game/driver boot"
-        fi
-        # SteamVR runs the driver under the Sniper sandbox, which ships only
-        # Python 3.9. Modern Protons need >= 3.11 (typing.Self), so the driver
-        # relies on the python3 shim's fallback: Steam Linux Runtime 4.0's
-        # python3.13. If that runtime is missing, Proton dies on startup and
-        # SteamVR aborts after ~20 s. The host python being modern does NOT
-        # help - the sandbox doesn't see it. The runtime can be on any Steam
-        # library drive, so scan them all (same parse as detect_game_dir).
-        _rt4=""
-        for _lib in "$STEAM_ROOT" $(awk -F'"' '/"path"/{print $4}' "$STEAM_ROOT/steamapps/libraryfolders.vdf" 2>/dev/null); do
-            [ -d "$_lib" ] || continue
-            for _py in "$_lib"/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files/bin/python3.13; do
-                [ -x "$_py" ] && { _rt4="$_py"; break; }
-            done
-            [ -n "$_rt4" ] && break
-        done
-        if [ -n "$_rt4" ]; then
-            ok "Steam Linux Runtime 4.0 present (python3.13 fallback for Sniper sandbox)"
-        else
-            warn "Steam Linux Runtime 4.0 missing - modern Protons die under the Sniper sandbox (20 s Safe-Mode crash)"
-            if pgrep -f 'steam\.sh' >/dev/null 2>&1; then
-                warn "triggering Steam install of Steam Linux Runtime 4.0 (appid 4183110)..."
-                ( steam steam://install/4183110 >/dev/null 2>&1 & )
-                warn "after it finishes, re-run ./standable check"
-            else
-                warn "fix: install Steam Linux Runtime 4.0, e.g. 'steam steam://install/4183110'"
-            fi
-        fi
-        if [ -n "$PROTON" ]; then
-            _forced=$(steam_forced_proton 2>/dev/null || true)
-            if [ -n "$_forced" ] && [ "$_forced" != "$PROTON" ]; then
-                warn "Proton differs from Steam-forced ($(basename "$(dirname "$_forced")") vs deployed $(basename "$(dirname "$PROTON")")) - next SteamVR boot auto-switches, no reinstall needed"
-            else
-                ok "Proton matches Steam-forced ($(basename "$(dirname "$PROTON")"))"
-            fi
-        fi
-    else
-        bad "game '$GAME_SUBDIR' not found in any Steam library"
-    fi
-    # Count wineservers on OUR prefix only (a leftover foreign-Proton wineserver
-    # holding our prefix is what trips the 21s load_drivers watchdog). A
-    # system-wide count flags unrelated games as a false "IPC will be split".
-    N=$(pgrep -x wineserver 2>/dev/null | wc -l)
-    OURS=0; FOREIGN=""
-    for ws in $(pgrep -x wineserver 2>/dev/null); do
-        if [ -r "/proc/$ws/environ" ]; then
-            if tr '\0' '\n' < "/proc/$ws/environ" 2>/dev/null \
-                | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
-                | grep -qx "STEAM_COMPAT_DATA_PATH=$COMPAT" >/dev/null 2>&1; then
-                OURS=$((OURS+1))
-            else
-                FOREIGN="$FOREIGN $ws"
-            fi
-        else
-            OURS=$((OURS+1))   # unreadable env - treat as ours (fail-open)
-        fi
-    done
-    if [ "$OURS" = 0 ]; then
-        ok "no wineservers on this prefix"
-    elif [ "$OURS" = 1 ] && [ -z "$FOREIGN" ]; then
-        ok "single wineserver (GUI+driver shared)"
-    elif [ "$OURS" -gt 1 ]; then
-        bad "$OURS wineservers on this prefix - IPC will be split!"
-        warn "kill the stale ones and re-run, or run ./standable install"
-    else
-        warn "1 wineserver on this prefix + foreign ones:$FOREIGN (unrelated games, fine)"
-    fi
-    # Proton helper processes (xalia.exe, steam.exe runner) don't match the
-    # sweep patterns (wine|proton|ignition_server), so an orphaned one can
-    # squat on this prefix across SteamVR restarts and wedge fresh sessions
-    # (observed: driver exit-1 loop until the stale xalia was killed) while
-    # every other check stays green. List them with age vs the vrserver boot:
-    # a helper older than the current vrserver cannot belong to this session.
-    _VRS=$(pgrep -x vrserver | head -1)
-    _VRS_START=0
-    [ -n "$_VRS" ] && _VRS_START=$(stat -c %Y "/proc/$_VRS" 2>/dev/null || echo 0)
-    _FOUND=""
-    for _hp in $(pgrep -f -i "xalia\.exe|steam\.exe" 2>/dev/null); do
-        [ -r "/proc/$_hp/environ" ] || continue
-        tr '\0' '\n' < "/proc/$_hp/environ" 2>/dev/null \
-            | sed 's#^STEAM_COMPAT_DATA_PATH=/run/host#STEAM_COMPAT_DATA_PATH=#' \
-            | grep -qx "STEAM_COMPAT_DATA_PATH=$COMPAT" || continue
-        _HSTART=$(stat -c %Y "/proc/$_hp" 2>/dev/null || echo 0)
-        _HPPID=$(ps -o ppid= -p "$_hp" 2>/dev/null | tr -d ' ')
-        _HCMD=$(tr '\0' ' ' < "/proc/$_hp/cmdline" 2>/dev/null | cut -c1-60)
-        _HFLAG="current session"
-        if [ -z "$_VRS_START" ] || [ "$_VRS_START" = 0 ]; then
-            _HFLAG="unknown (vrserver not running)"
-        elif [ "$_HSTART" -lt "$_VRS_START" ]; then
-            _HFLAG="STALE (predates vrserver boot)"
-        fi
-        _FOUND="$_FOUND
-        pid $_hp [$_HFLAG] ppid $_HPPID: $_HCMD"
-    done
-    if [ -z "$_FOUND" ]; then
-        ok "no orphaned Proton helpers on this prefix"
-    else
-        warn "Proton helper processes bound to this prefix (invisible to the sweeps):$_FOUND"
-        warn "kill only STALE-flagged ones (plain kill, never -9 or live session runners) and restart SteamVR if the driver exit-1 loops"
-    fi
-    unset _VRS _VRS_START _FOUND _hp _HSTART _HPPID _HCMD _HFLAG
-    # Stale Ignition IPC segments: each boot uses fresh token-named segments,
-    # so any predating the vrserver boot are orphaned leftovers of unclean
-    # cycles. Inert by design (never reused), but worth knowing when the
-    # driver misbehaves. Check never deletes - remove manually with SteamVR
-    # stopped if a stuck episode calls for a fully clean board.
-    _VRS2=$(pgrep -x vrserver | head -1)
-    if [ -n "$_VRS2" ]; then
-        _VS2=$(stat -c %Y "/proc/$_VRS2" 2>/dev/null || echo 0)
-        _STALESHM=""
-        for _shm in /dev/shm/ignition_ipc_*_shm; do
-            [ -e "$_shm" ] || continue
-            _SMT=$(stat -c %Y "$_shm" 2>/dev/null || echo 0)
-            if [ "$_VS2" != 0 ] && [ "$_SMT" -lt "$_VS2" ]; then
-                _STALESHM="$_STALESHM $(basename "$_shm")"
-            fi
-        done
-        if [ -n "$_STALESHM" ]; then
-            warn "stale Ignition IPC segments (predate vrserver boot):$_STALESHM"
-        else
-            ok "no stale Ignition IPC segments"
-        fi
-        unset _STALESHM _shm _SMT
-        unset _VS2
-    fi
-    unset _VRS2
-    LOG="$STEAM_ROOT/logs/vrserver.txt"
-    if [ -f "$LOG" ]; then
-        F=$(tail -n 300 "$LOG" | grep -v "Failed to send message: SteamUser" | grep -v "SteamVR Shutting Down" | grep -ac "Failed to Load from\|Failed to send message" 2>/dev/null)
-        L=$(stat -c %Y "$LOG"); NOW=$(date +%s)
-        if [ $((NOW-L)) -lt 3600 ] && [ "${F:-0}" != 0 ]; then
-            warn "recent driver failures in vrserver.txt ($F), see README Troubleshooting"
-        else
-            ok "vrserver.txt clean of known failure patterns"
-        fi
-        # The driver hung past SteamVR's ~21s load_drivers watchdog, which
-        # aborts all of vrserver and lands it in safe mode. Usually the server
-        # didn't answer; serverhelper.log shows what it did.
-        if tail -n 400 "$LOG" | grep -aq "Watchdog timeout in thread Connection load_drivers"; then
-            warn "SteamVR load_drivers watchdog abort (standable driver hung >21s). Check serverhelper.log; re-run ./standable install then restart SteamVR"
-        fi
-        # The exact VRInitError_Init_InterfaceNotFound (105) signature: SteamVR
-        # loaded driver_standable.so, but the Ignition handshake never produced
-        # a provider, so HmdDriverFactory returned null. Two known causes: an
-        # old server binary (pre-registration-fix), or the helper's spawn guard
-        # matching a stale server from an earlier session with a different
-        # token (see the serverhelper.log check below). Either way every other
-        # check stays green through it, which is why users get stuck.
-        for _vlog in "$STEAM_ROOT/logs/vrserver.txt" "$STEAM_ROOT/logs/vrserver.previous.txt"; do
-            [ -f "$_vlog" ] || continue
-            if tail -n 600 "$_vlog" | grep -aq "Could not create interface in driver standable\|Unable to load driver standable because of error VRInitError_Init_InterfaceNotFound"; then
-                bad "driver handshake failed (VRInitError_Init_InterfaceNotFound, 105) - $(basename "$_vlog") shows SteamVR loaded the shim but the server never answered:"
-                tail -n 600 "$_vlog" | grep -a "Could not create interface in driver standable\|VRInitError_Init_InterfaceNotFound" | tail -3 | sed 's/^/        /'
-                warn "  if serverhelper.log shows 'spawn skipped' with no 'server exit': quit SteamVR, pkill -f ignition_server.exe, restart SteamVR"
-                warn "  otherwise an old ignition_server.exe: re-run ./standable install on testing/rc, then restart SteamVR"
-                break
-            fi
-        done
-        # SteamVR error 307: "A key component of SteamVR isn't working" -
-        # a vrcompositor/vulkan startup failure. Pull the smoking-gun lines.
-        # NB: avoid matching "307" inside microsecond timestamps.
-        if tail -n 400 "$LOG" | grep -aqE "Error.*\b307\b|vrcompositor.*(crash|segfault)|Failed to (connect|load|init).*compositor|enableLinuxVulkanAsync|Vulkan.*(failed|error)"; then
-            G=$(tail -n 400 "$LOG" | grep -aiE "\b307\b|vrcompositor|enableLinuxVulkanAsync|Vulkan" | tail -5)
-            warn "possible SteamVR 307 (compositor) failure in vrserver.txt:"
-            echo "$G" | sed 's/^/        /'
-        else
-            ok "no SteamVR 307 / compositor failure signature in vrserver.txt"
-        fi
-    fi
-    # launch_serverhelper's own log is where the server side of the handshake
-    # is visible. A run dominated by "spawn skipped" means the single-instance
-    # guard matched a server that doesn't belong to this session (different
-    # token) and never launched one for the current token - the driver then
-    # fails with 105 even though nothing crashed. (Fixed by scoping the guard
-    # to the token; stale logs still show the pattern.)
-    SLOG="${XDG_STATE_HOME:-$HOME/.local/state}/standable/serverhelper.log"
-    if [ -f "$SLOG" ]; then
-        _skips=$(tail -n 200 "$SLOG" 2>/dev/null | grep -c "spawn skipped")
-        _exits=$(tail -n 200 "$SLOG" 2>/dev/null | grep -c "server exit")
-        if [ "${_skips:-0}" -ge 30 ] && [ "${_exits:-0}" -eq 0 ]; then
-            bad "serverhelper.log: $_skips recent 'spawn skipped' and no server ever launched - a stale ignition_server.exe is treated as running, so this session never gets one (VRInitError 105). Kill leftover ignition_server.exe/wineserver, then restart SteamVR"
-        elif [ "${_skips:-0}" -ge 30 ]; then
-            warn "serverhelper.log: many recent 'spawn skipped' entries ($_skips) - stale servers from earlier sessions may be lingering"
-        else
-            ok "serverhelper.log: server launches not blocked by stale instances"
-        fi
-    fi
-    unset _skips _exits SLOG
-    # --check always appends the full system dump to the log for sharing.
-    {
-            echo ""
-            echo "--- system ---"
-            uname -a
-            [ -f /etc/os-release ] && { echo ""; cat /etc/os-release; }
-            echo ""
-            echo "--- cpu ---"
-            grep -m1 "model name" /proc/cpuinfo 2>/dev/null || true
-            echo ""
-            echo "--- memory ---"
-            free -h 2>/dev/null || true
-            echo ""
-            echo "--- gpu ---"
-            if command -v vulkaninfo >/dev/null 2>&1; then
-                vulkaninfo 2>/dev/null | grep -E "deviceName|driverInfo|apiVersion" | head -6
-            elif [ -d /sys/class/drm ]; then
-                for c in /sys/class/drm/card*/device/vendor; do
-                    [ -f "$c" ] && echo "$(dirname "$c"): $(cat "$c" 2>/dev/null)"
-                done
-            fi
-            echo ""
-            echo "--- display server ---"
-            echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unset}"
-            echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-unset}"
-            echo "XDG_SESSION_DESKTOP=${XDG_SESSION_DESKTOP:-unset}"
-            echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset}"
-            echo "DISPLAY=${DISPLAY:-unset}"
-            echo ""
-            echo "--- nvidia ---"
-            if command -v nvidia-smi >/dev/null 2>&1; then
-                nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -2 || echo "(nvidia-smi failed)"
-            elif command -v nvidia-settings >/dev/null 2>&1; then
-                nvidia-settings --version 2>/dev/null | head -1 || echo "(nvidia-settings)"
-            else
-                echo "(no nvidia tools)"
-            fi
-            echo ""
-            echo "--- headset (usb) ---"
-            lsusb 2>/dev/null | grep -iE "valve|holographic|index|vive|oculus|meta|psvr|playstation|windows mixed|hp |dell |reverb" || echo "(no headset usb device found)"
-            echo ""
-            echo "--- steamvr drivers ---"
-            ls "$STEAM_ROOT/steamapps/common/SteamVR/drivers/" 2>/dev/null | grep -vE "^\s*$" || echo "(none)"
-            echo ""
-            echo "--- alvr ---"
-            if ls -d "$HOME/.local/share/ALVR-Launcher"* "$HOME/.local/share/ALVR"* 2>/dev/null | head -1 >/dev/null; then
-                ls -d "$HOME/.local/share/ALVR-Launcher"* "$HOME/.local/share/ALVR"* 2>/dev/null | head -3
-                pgrep -a alvr 2>/dev/null | head -3 || echo "(alvr not running)"
-            else
-                echo "(not installed)"
-            fi
-            echo ""
-            echo "--- steam ---"
-            echo "STEAM_ROOT=$STEAM_ROOT"
-            if [ -f "$STEAM_ROOT/package.txt" ]; then
-                echo "steam package: $(cat "$STEAM_ROOT/package.txt" 2>/dev/null)"
-            fi
-            if [ -f "$STEAM_ROOT/package/beta" ]; then
-                echo "steam branch: $(cat "$STEAM_ROOT/package/beta" 2>/dev/null)"
-            fi
-            if [ -d "$STEAM_ROOT/steamapps/common/SteamVR" ]; then
-                cat "$STEAM_ROOT/steamapps/common/SteamVR/bin/linux64/runtime_resource.vrmanifest" 2>/dev/null \
-                    | grep -E '"version_string"|"api_version"' || true
-            fi
-            echo ""
-            echo "--- proton ---"
-            echo "detected: $PROTON"
-            if [ -n "$PROTON" ] && [ -f "$PROTON" ]; then
-                head -3 "$PROTON" 2>/dev/null | grep -oE "Proton [0-9a-zA-Z.-]+" || true
-            fi
-            echo ""
-            echo "--- game ---"
-            echo "GAME_DIR=$GAME_DIR"
-            echo "GAME_FOUND=$GAME_FOUND"
-            if [ -n "$GAME_DIR" ] && [ -f "$GAME_DIR/bin/linux64/launch_serverhelper.sh" ]; then
-                grep -E "^(PROTON|STEAM_ROOT|S_TARGET|S_ROOT)=" "$GAME_DIR/bin/linux64/launch_serverhelper.sh" 2>/dev/null
-            fi
-            echo ""
-            echo "--- prefix ---"
-            echo "PFX=$PFX"
-            [ -f "$PFX/user.reg" ] && grep -E "SteamPath|S:" "$PFX/user.reg" 2>/dev/null | head -5
-            echo ""
-            echo "--- openvr ---"
-            cat "$HOME/.config/openvr/openvrpaths.vrpath" 2>/dev/null || echo "(not found)"
-            echo ""
-            echo "--- steamvr settings ---"
-            CFG="$STEAM_ROOT/config/steamvr.vrsettings"
-            if [ -f "$CFG" ]; then
-                python3 -c "
-import json, sys
-d = json.load(open(sys.argv[1]))
-sv = d.get('steamvr', {})
-dr = d.get('driver_standable', {})
-for k in ('enableSafeMode','enableLinuxVulkanAsync'):
-    print(f'steamvr.{k} = {sv.get(k, \"(unset)\")}')
-print(f'driver_standable.enable = {dr.get(\"enable\", \"(unset)\")}')
-" "$CFG" 2>/dev/null || echo "(json parse failed)"
-            else
-                echo "(steamvr.vrsettings not found)"
-            fi
-            echo ""
-            echo "--- wineserver ---"
-            pgrep -a wineserver 2>/dev/null || echo "(none)"
-            echo ""
-            echo "--- vrserver.txt: crash signatures ---"
-            grep -aiE "watchdog|abort|segfault|HmdNotFound|Refusing|Failed to (load|send|connect)|Error.*\b30[0-9]\b" "$STEAM_ROOT/logs/vrserver.txt" 2>/dev/null | tail -15 || echo "(none)"
-            echo ""
-            echo "--- vrserver.previous.txt: crash signatures ---"
-            grep -aiE "watchdog|abort|segfault|HmdNotFound|Refusing|Failed to (load|send|connect)|Error.*\b30[0-9]\b" "$STEAM_ROOT/logs/vrserver.previous.txt" 2>/dev/null | tail -15 || echo "(none)"
-            echo ""
-            echo "--- vrcompositor-linux.txt: last 30 lines ---"
-            tail -30 "$STEAM_ROOT/logs/vrcompositor-linux.txt" 2>/dev/null || echo "(not found)"
-            echo ""
-            echo "--- vrserver.txt (last 40 lines) ---"
-            tail -40 "$STEAM_ROOT/logs/vrserver.txt" 2>/dev/null || echo "(not found)"
-            echo ""
-            echo "--- /check output above ---"
-        } >> "$LOG_FILE" 2>&1
-        say "Full diagnostics appended to $LOG_FILE"
-        say "If the driver/game fails to launch, also attach ~/.local/state/standable/{hook,serverhelper}.log"
-    exit $fail
+then run "Verify integrity of game files" for Standable in Steam
+(Properties -> Installed Files).
+
+I'm still working on the WiVRn port:
+  https://github.com/meeyao/standable-wivrn-port
+EOF
+    exit 0
 fi
 
 # =============================================================== UNINSTALL ==
-if [ "${1:-}" = "--uninstall" ]; then
-    detect_steam_root || die "Steam root not found"
-    detect_game_dir || die "game not found"
-    pick_prefix
-    WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
-    # Never pull a loaded driver out from under a running vrserver: deleting
-    # driver_standable.so mid-session crashes it. Refuse while it runs.
-    if pgrep -x vrserver >/dev/null 2>&1; then
-        if [ -n "$DRY_RUN" ]; then
-            warn "SteamVR is running - a real run would refuse until it quits"
-        elif [ -z "${ASSUME_YES:-}" ]; then
-            die "SteamVR is running - quit it first so the loaded driver can unload, then re-run"
-        else
-            warn "SteamVR is running - removing its loaded driver will crash it"
-        fi
+command -v python3 >/dev/null 2>&1 || \
+    warn "python3 not found - the OpenVR path and registry cleanup will be skipped"
+detect_steam_root || warn "Steam not found - cleaning user files only"
+detect_game_dir || warn "Standable not found - cleaning user files only"
+[ -n "$STEAM_ROOT" ] && pick_prefix
+[ -n "$PFX" ] && WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
+# The beta ships driver.vrdrivermanifest at Standable's root. From that point the
+# official build owns the driver, its OpenVR registration, the Proton vrclient
+# copies and the Steam registry values, so leave those shared paths alone.
+OFFICIAL=""
+[ -n "$GAME_DIR" ] && [ -f "$GAME_DIR/driver.vrdrivermanifest" ] && OFFICIAL=1
+
+# Never pull a loaded driver out from under a running vrserver: deleting
+# driver_standable.so mid-session crashes it. Refuse while it runs.
+if pgrep -x vrserver >/dev/null 2>&1; then
+    if [ -n "$DRY_RUN" ]; then
+        warn "SteamVR is running - a real run would refuse until it quits"
+    elif [ -z "$ASSUME_YES" ]; then
+        die "SteamVR is running - quit it first so the loaded driver can unload, then re-run"
+    else
+        warn "SteamVR is running - removing its loaded driver will crash it"
     fi
-    say "Removing port artifacts…"
-    run rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
-    run rm -fv "$HOME/.local/share/icons/standable.png"
+fi
+
+say "Removing patch artifacts…"
+run rm -fv "$HOME/bin/standable-gui" "$HOME/bin/standable_launch_hook.sh" "$HOME/.local/bin/standable_launch_hook.sh" "$HOME/Desktop/standable-gui.desktop" "$HOME/Desktop/Standable GUI.desktop"
+run rm -f "$HOME/.local/bin"/standable_launch_hook.sh.bak-* "$HOME/bin"/standable_launch_hook.sh.bak-*
+run rm -fv "$HOME/.local/share/icons/standable.png"
+run rm -rf "$HOME/.cache/standable-ignition"
+
+# The dashboard-overlay helper from the internal build (if it ever landed in
+# the Standable directory) - the standalone copy in ~/.local is left alone.
+if [ -n "$GAME_DIR" ]; then
+    run rm -fv "$GAME_DIR/bin/linux64/standable_overlay"
+    run rm -f "$GAME_DIR/bin/linux64"/standable_overlay.bak-* \
+        "$GAME_DIR/bin/linux64"/libopenvr_api.so.bak-*
+fi
+
+if [ -n "$PFX" ]; then
     run rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
-    run rm -fv "$PFX/dosdevices/s:"
+    # s: and the prefix vrclient copies are shared with Steam/Proton once the
+    # official build is installed; only pre-beta installs needed them from us.
+    [ -z "$OFFICIAL" ] && run rm -fv "$PFX/dosdevices/s:"
     run rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
-    # Prefix shims: we created this Steam tree (fresh prefixes have none), so
-    # restore any pre-existing file from our .bak, else remove the stub.
+    # Prefix shims: restore a pre-existing file from our .bak. Without a
+    # backup, only delete the exact patch stub - never an unknown/newer file
+    # that Steam may have installed there since.
+    _shim_sha=7e4ecf516b21d5e933b98cb1a7dea2b15d310c0a049acf434e77af8b61cd8a65
     for _shim in vrpathreg.exe vrmonitor.exe; do
         _f="$WIN64/$_shim"
         _bak=$(ls -1t "$_f".bak-* 2>/dev/null | head -1)
         if [ -n "$_bak" ]; then
             run mv -f "$_bak" "$_f"
             [ -n "$DRY_RUN" ] || say "restored $_f from backup"
-        else
-            run rm -fv "$_f"
+        elif [ -f "$_f" ]; then
+            _have=$(sha256sum "$_f" 2>/dev/null | cut -d' ' -f1)
+            if [ "$_have" = "$_shim_sha" ]; then
+                run rm -fv "$_f"
+            else
+                warn "left $_f (not the patch's shim)"
+            fi
         fi
     done
-    unset _shim _f _bak
-    # Deployed vrclient copies (Proton maintains this dir too - removing ours
-    # is harmless either way).
-    run rm -fv "$PFX/drive_c/vrclient/bin"/vrclient*.dll*
-    # Everything the installer added under bin/linux64, plus our .bak files.
-    # Untouched: the game's own files (Standable.exe, openvr_api.dll,
-    # vrclient_x64.dll, and bin/win64/driver_standable.dll).
-    run rm -fv "$GAME_DIR/bin/linux64/driver_standable.so" \
-        "$GAME_DIR/bin/linux64/ignition_server.exe" \
-        "$GAME_DIR/bin/linux64/ignition_bridge.dll" \
-        "$GAME_DIR/bin/linux64/launch_serverhelper.sh" \
-        "$GAME_DIR/bin/linux64/ignition.json" \
-        "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg" \
-        "$GAME_DIR/bin/linux64/steam_api64.dll" \
-        "$GAME_DIR/bin/win64/steam_api64.dll" \
-        "$GAME_DIR/bin/linux64/python3" \
-        "$GAME_DIR/bin/linux64/proton_resolve.sh" \
-        "$GAME_DIR/bin/linux64/sweep.sh" \
-        "$GAME_DIR/bin/linux64/win_vrpath.sh"
-    run rm -f "$GAME_DIR/bin/linux64"/driver_standable.so.bak-* \
-        "$GAME_DIR/bin/linux64"/ignition_server.exe.bak-* \
-        "$GAME_DIR/bin/linux64"/ignition_bridge.dll.bak-* \
-        "$GAME_DIR/bin/linux64"/launch_serverhelper.sh.bak-* \
-        "$GAME_DIR/bin/linux64"/ignition.json.bak-* \
-        "$GAME_DIR/bin/linux64"/wine_psvr2_hidraw.reg.bak-* \
-        "$GAME_DIR/bin/linux64"/steam_api64.dll.bak-* \
+    unset _shim _shim_sha _f _bak _have
+    # Pre-beta installs needed our vrclient copies; the official build now
+    # deploys its own into this Proton-managed directory, so leave it.
+    [ -z "$OFFICIAL" ] && run rm -fv "$PFX/drive_c/vrclient/bin"/vrclient*.dll*
+fi
+
+if [ -n "$GAME_DIR" ]; then
+    # driver_standable.so: restore Standable's own file when we backed one up.
+    # With no backup, keep it when it matches the official build manifest and
+    # delete it only when it is something the patch installed.
+    _lin="$GAME_DIR/bin/linux64"
+    _drv="$_lin/driver_standable.so"
+    _want=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next((f["sha256"] for f in d.get("files",[]) if f["file"]=="driver_standable.so"),""))' "$_lin/linux-build.json" 2>/dev/null)
+    _have=$(sha256sum "$_drv" 2>/dev/null | cut -d' ' -f1)
+    _drv_bak=$(ls -1t "$_drv".bak-* 2>/dev/null | head -1)
+    # The beta's driver matches the manifest: keep it even when an old .bak
+    # exists, or we would downgrade the official driver to the pre-beta one.
+    if [ -n "$_want" ] && [ "$_want" = "$_have" ]; then
+        [ -n "$DRY_RUN" ] || say "kept Standable's official driver_standable.so"
+    elif [ -n "$_drv_bak" ]; then
+        run mv -f "$_drv_bak" "$_drv"
+        [ -n "$DRY_RUN" ] || say "restored Standable's original driver_standable.so"
+    elif [ -f "$_drv" ]; then
+        if [ -z "$_want" ]; then
+            # No manifest hash to compare against (missing file or no
+            # python3): never guess in the destructive direction.
+            warn "could not verify driver_standable.so - leaving it in place; use Steam's Verify integrity to restore the official file"
+        else
+            run rm -fv "$_drv"
+        fi
+    fi
+    # bin/win64/steam_api64.dll: official builds ship a stub; only restore a
+    # file we replaced, never delete one that might belong to Standable.
+    _sa="$GAME_DIR/bin/win64/steam_api64.dll"
+    _sa_bak=$(ls -1t "$_sa".bak-* 2>/dev/null | head -1)
+    [ -n "$_sa_bak" ] && run mv -f "$_sa_bak" "$_sa"
+
+    # Everything else under bin/linux64 is ours (Standable's own files are
+    # Standable.exe, openvr_api.dll, vrclient_x64.dll, libsteam_api.so,
+    # libopenvr_api.so, linux-build.json and bin/win64/driver_standable.dll).
+    run rm -fv "$_lin/ignition_server.exe" \
+        "$_lin/ignition_bridge.dll" \
+        "$_lin/launch_serverhelper.sh" \
+        "$_lin/ignition.json" \
+        "$_lin/wine_psvr2_hidraw.reg" \
+        "$_lin/steam_api64.dll" \
+        "$_lin/python3" \
+        "$_lin/proton_resolve.sh" \
+        "$_lin/sweep.sh" \
+        "$_lin/win_vrpath.sh"
+    run rm -f "$_lin"/driver_standable.so.bak-* \
+        "$_lin"/ignition_server.exe.bak-* \
+        "$_lin"/ignition_bridge.dll.bak-* \
+        "$_lin"/launch_serverhelper.sh.bak-* \
+        "$_lin"/ignition.json.bak-* \
+        "$_lin"/wine_psvr2_hidraw.reg.bak-* \
+        "$_lin"/steam_api64.dll.bak-* \
         "$GAME_DIR/bin/win64"/steam_api64.dll.bak-* \
-        "$GAME_DIR/bin/linux64"/python3.bak-* \
-        "$GAME_DIR/bin/linux64"/proton_resolve.sh.bak-* \
-        "$GAME_DIR/bin/linux64"/sweep.sh.bak-* \
-        "$GAME_DIR/bin/linux64"/win_vrpath.sh.bak-*
-    # vrpath seed: strip our entries (Linux path and S:\ form), keep the rest.
-    if [ -n "$DRY_RUN" ]; then
-        printf '\033[1;36m # \033[0mpython3 removes Standable entries from ~/.config/openvr/openvrpaths.vrpath\n'
-    else
-        python3 - <<'PYEOF' 2>/dev/null
-import json, os
+        "$_lin"/python3.bak-* \
+        "$_lin"/proton_resolve.sh.bak-* \
+        "$_lin"/sweep.sh.bak-* \
+        "$_lin"/win_vrpath.sh.bak-*
+fi
+
+# vrpath: on a pre-beta install, strip the patch's seed entries. After the
+# official update Standable ships driver.vrdrivermanifest at its root and owns
+# that same entry, so keep it (and the S:\ form the Proton GUI checks) and only
+# drop a stale old bin/linux64 shim entry. If Standable isn't installed, leave
+# the file alone entirely.
+if [ -z "$GAME_DIR" ]; then
+    warn "Standable not found - leaving the OpenVR driver paths alone"
+elif [ -n "$DRY_RUN" ]; then
+    printf '\033[1;36m # \033[0mpython3 removes only stale Standable shim entries from ~/.config/openvr/openvrpaths.vrpath (keeps the official driver registration)\n'
+else
+    python3 - "$GAME_DIR" <<'PYEOF' 2>/dev/null
+import json, os, sys
 p = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
 try:
     data = json.load(open(p))
 except Exception:
     raise SystemExit(0)
 ed = data.get('external_drivers') or []
-new_ed = [e for e in ed if 'Standable' not in e]
-if len(new_ed) != len(ed):
+game_dir = sys.argv[1] if len(sys.argv) > 1 else ''
+official = bool(game_dir) and os.path.isfile(os.path.join(game_dir, 'driver.vrdrivermanifest'))
+
+def old_shim(e):
+    return 'Standable' in e and e.replace('\\', '/').rstrip('/').endswith('/bin/linux64')
+
+if official:
+    new_ed = [e for e in ed if not old_shim(e)]
+    removed = [e for e in ed if old_shim(e)]
+    if removed:
+        print("  removed %d stale Standable shim entr%s" % (len(removed), 'y' if len(removed) == 1 else 'ies'))
+    else:
+        print("  kept the official Standable driver registration")
+else:
+    new_ed = [e for e in ed if 'Standable' not in e]
+    if len(new_ed) != len(ed):
+        print("  removed %d Standable seed entr%s" % (len(ed) - len(new_ed), 'y' if len(ed) - len(new_ed) == 1 else 'ies'))
+if new_ed != ed:
     data['external_drivers'] = new_ed
     json.dump(data, open(p, 'w'), indent=2)
-    print("  removed %d Standable seed entr%s" % (len(ed) - len(new_ed), 'y' if len(ed) - len(new_ed) == 1 else 'ies'))
 PYEOF
-    fi
-    # SteamPath registry value: drop it by editing user.reg directly (no
-    # Proton boot needed). Only touches the exact value the installer sets;
-    # verifies afterwards and falls back to manual instructions.
+fi
+
+# SteamPath registry value: only pre-beta installs needed it from us. Steam
+# owns that value now; on an official install, leave it alone.
+if [ -n "$PFX" ] && [ -z "$OFFICIAL" ]; then
     if [ -n "$DRY_RUN" ]; then
         printf '\033[1;36m # \033[0mpython3 removes the SteamPath value from the prefix user.reg\n'
     else
@@ -1264,9 +302,6 @@ lines = raw.split(b'\n')
 out, insec, dropped = [], False, False
 for ln in lines:
     if ln.startswith(b'['):
-        # Section headers carry a trailing timestamp
-        # ("[Software\\Valve\\Steam] 1789013391"); match the exact section
-        # only, never ActiveProcess/Apps subsections (Steam's own data).
         insec = bool(re.match(br'\[Software\\\\Valve\\\\Steam\](\s+\d+)?$', ln.strip()))
         out.append(ln)
         continue
@@ -1278,323 +313,44 @@ if dropped:
     open(p, 'wb').write(b'\n'.join(out))
     print("  removed SteamPath from user.reg")
 PYEOF
-        if grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null; then
-            warn "SteamPath still present - remove it manually: regedit, HKCU\\Software\\Valve\\Steam"
-        fi
     fi
-    # Restore the user's original SteamVR settings (backed up before our
-    # first boot-time modification), and drop the crash-timestamp trigger.
-    if [ -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" ]; then
+fi
+
+# Restore the user's original SteamVR settings (backed up before our first
+# boot-time modification), and drop the crash-timestamp trigger. Never restore
+# that pre-beta backup once the official build is installed - it would undo
+# SteamVR settings made since.
+if [ -n "$STEAM_ROOT" ]; then
+    if [ -z "$GAME_DIR" ]; then
+        [ -n "$DRY_RUN" ] || say "Standable not found - left SteamVR settings alone"
+    elif [ -z "$OFFICIAL" ] && [ -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" ]; then
         run mv -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" "$STEAM_ROOT/config/steamvr.vrsettings"
         [ -n "$DRY_RUN" ] || say "Restored your original steamvr.vrsettings"
+    elif [ -n "$OFFICIAL" ]; then
+        [ -n "$DRY_RUN" ] || say "Kept your current steamvr.vrsettings (official build)"
     else
         [ -n "$DRY_RUN" ] || say "No steamvr.vrsettings backup found - left your settings as-is"
     fi
     run rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
-    say "Uninstall complete - driver, server, hooks, seeds and registry value removed."
-    say "Restart SteamVR; it should no longer list or load a standable driver."
+fi
+
+if [ -n "$DRY_RUN" ]; then
+    echo
+    say "Dry run - nothing was changed."
     exit 0
 fi
 
-# ================================================================= INSTALL ==
-for r in bash python3 tar curl; do require "$r"; done
-
-say "Detecting environment…"
-detect_steam_root || {
-    [ -d "$HOME/.var/app/com.valvesoftware.Steam" ] \
-        && die "Flatpak Steam detected but not supported, install Steam natively."
-    die "Steam not found (~/.local/share/Steam)"
-}
-detect_game_dir   || die "game '$GAME_SUBDIR' not found in any Steam library"
-pick_proton
-clear_stale_services
-pick_prefix
-detect_vrchat_prefix || warn "VRChat not found in any Steam library - auto-calibration link will be skipped"
-STEAMVR="$STEAM_ROOT/steamapps/common/SteamVR"
-WIN64="$PFX/drive_c/Program Files (x86)/Steam/steamapps/common/SteamVR/bin/win64"
-
-say "Steam root : $STEAM_ROOT"
-say "Game       : $GAME_DIR"
-say "Prefix     : $COMPAT (pfx: $PFX)"
-say "Proton     : $PROTON"
-if [ -n "${VRC_COMPAT:-}" ]; then say "VRChat pfx : $VRC_COMPAT"; fi
-
-[ -d "$STEAMVR" ] || die "SteamVR not installed at $STEAMVR, install it in Steam first."
-[ -f "$GAME_DIR/bin/win64/driver_standable.dll" ] || die "unexpected game layout (driver dll missing)"
-[ -f "$GAME_DIR/driver.vrdrivermanifest" ] || die "driver.vrdrivermanifest missing, game layout changed or incomplete install"
-resolve_ignition
-resolve_reg
-
-# -- prefix bootstrap --------------------------------------------------------
-if [ ! -d "$PFX/drive_c/windows" ]; then
-    say "Prefix missing, creating via Proton (one-time, ~30 s)…"
-    run mkdir -p "$PFX"
-    run_env "STEAM_COMPAT_DATA_PATH=$COMPAT" "STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAM_ROOT" -- \
-        timeout 300 "$PROTON" run cmd /c exit >/dev/null 2>&1 \
-        || { [ -n "$DRY_RUN" ] || die "prefix creation failed, launch the game once in Steam, then re-run"; }
+if [ -z "$GAME_DIR" ]; then
+    say "Uninstall complete - user files removed. Standable wasn't found, so its files and OpenVR paths were left alone."
+    echo
+    say "When you install Standable from Steam, it will set up its own driver."
+    exit 0
 fi
 
-# -- prefix binaries ---------------------------------------------------------
-# PSVR2 Sense controller registry (Ignition) - imported by the shim each run
-run mkdir -p "$GAME_DIR/bin/linux64"
-bak "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg"
-run cp "$IGN_PSVR2_REG" "$GAME_DIR/bin/linux64/"
-
-say "Deploying prefix binaries…"
-run mkdir -p "$PFX/drive_c/vrclient/bin" "$WIN64"
-bak "$PFX/drive_c/vr_bootstrap.exe";  run cp "$SHIM_DIR/vr_bootstrap.exe" "$PFX/drive_c/"
-bak "$WIN64/vrpathreg.exe";           run cp "$SHIM_DIR/vrpathreg2.exe"   "$WIN64/vrpathreg.exe"
-run cp "$SHIM_DIR/vrpathreg2.exe"       "$WIN64/vrmonitor.exe"           # existence-check only
-PC="$PROTON"; PC="${PC%/proton}/files/lib/wine/x86_64-windows"
-ls "$PC"/vrclient*.dll >/dev/null 2>&1 || die "vrclient dlls not found at $PC"
-bak "$PFX/drive_c/vrclient/bin/vrclient_x64.dll"
-run cp "$PC"/vrclient*.dll "$PFX/drive_c/vrclient/bin/"
-
-# -- VRChat LocalLow link (auto-calibration) ---------------------------------
-# The driver reads VRChat's IK-debug log from %UserProfile%\AppData\LocalLow\VRChat\VRChat\
-# inside ITS OWN prefix; VRChat runs in a separate prefix (438100), so we link
-# VRChat's data in. Also cached for the per-launch repair loops (@VRCHAT_VRC_DIR@).
-setup_vrchat_link
-
-# Auto-calibration also needs VRChat's OSC toggle, which is off by default
-# (Standable sends its IK params over OSC). Report it; don't fail the install.
-if [ -n "${VRC_COMPAT:-}" ] && [ -f "$VRC_COMPAT/pfx/user.reg" ] \
-   && ! grep -aq 'VRC_INPUT_OSC_h[0-9]*"=dword:00000001' "$VRC_COMPAT/pfx/user.reg"; then
-    say "NOTE: VRChat OSC is off; enable Action Menu > OSC > Enabled for auto-calibration."
-fi
-
-# -- registry ----------------------------------------------------------------
-say "Setting SteamPath registry (HKCU\\Software\\Valve\\Steam)…"
-run_env "STEAM_COMPAT_DATA_PATH=$COMPAT" "STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAM_ROOT" -- \
-    timeout 120 "$PROTON" run reg add 'HKCU\Software\Valve\Steam' /v SteamPath \
-    /t REG_SZ /d 'C:\Program Files (x86)\Steam' /f \
-    || { [ -n "$DRY_RUN" ] || warn "reg add failed (will retry on next shim run)"; }
-
-# -- s: link -----------------------------------------------------------------
-# Valve Proton maps s: to the Steam parent (S:\steamapps\common\...) via
-# get_validated_steamapps_parent(). Other builds map s: to steamapps directly
-# (S:\common\...). Detect which by checking for the parent wrapper. When the
-# game lives on a secondary library, s: is that library's root, not the
-# default Steam root.
-S_ROOT="${GAME_LIB:-$STEAM_ROOT}"
-PROTON_DIR_S="$(dirname "$PROTON")"
-if grep -q 'get_validated_steamapps_parent' "$PROTON_DIR_S/proton" 2>/dev/null; then
-    S_TARGET="$S_ROOT"
-else
-    S_TARGET="$S_ROOT/steamapps"
-fi
-run ln -sfn "$S_TARGET" "$PFX/dosdevices/s:" && say "Created s: dosdevice link."
-
-# -- seed merge --------------------------------------------------------------
-# Two Standable entries: the Linux path (native driver load) plus the
-# current-Proton S:\ form. Proton copies this file into the prefix on every
-# launch, and the game validates its driver path there with a raw Win32
-# check - a bare /home/... entry can never pass under Wine, hence the
-# per-boot "driver path is missing" dialog without the S:\ entry (the driver
-# itself still loads, so the dialog means nothing). Stale-convention S:\
-# variants are dropped; the entry is re-derived here so a Proton switch
-# (re-install) re-seeds the right convention.
-say "Merging external_drivers into ~/.config/openvr/openvrpaths.vrpath…"
-if [ -n "$DRY_RUN" ]; then
-    printf '\033[1;36m # \033[0mpython3 adds "$GAME_DIR" + the S:\\ game path to external_drivers in ~/.config/openvr/openvrpaths.vrpath (keeps existing entries)\n'
-else
-    python3 - "$HOME" "$GAME_DIR" "$S_TARGET" <<'PYEOF'
-import json, os, sys
-home, game_dir, s_target = sys.argv[1], sys.argv[2], sys.argv[3]
-upath = game_dir
-try:
-    rel = os.path.relpath(game_dir, s_target)
-except Exception:
-    rel = None
-expected = None
-if rel and not rel.startswith('..'):
-    expected = 'S:\\' + rel.replace('/', '\\')
-seed_path = os.path.expanduser('~/.config/openvr/openvrpaths.vrpath')
-os.makedirs(os.path.dirname(seed_path), exist_ok=True)
-try:
-    data = json.load(open(seed_path))
-except Exception:
-    data = {"runtime": [], "version": 1}
-ed = [e for e in (data.get('external_drivers') or [])
-      if not ('Standable' in e and (e == upath or ('\\' in e and e != expected)))]
-if upath not in ed: ed.insert(0, upath)
-if expected and expected not in ed:
-    ed.insert(1 if upath in ed else 0, expected)
-data['external_drivers'] = ed
-json.dump(data, open(seed_path, 'w'), indent=2)
-print("  entries:", ", ".join(e[:40] for e in ed))
-PYEOF
-fi
-
-# -- seed the game's Windows-side openvrpaths.vrpath --------------------------
-# The game runs under Wine and reads %LOCALAPPDATA%\openvr\openvrpaths.vrpath,
-# NOT the Linux ~/.config copy. Seed its runtime (via SteamPath registry ->
-# C:\Program Files (x86)\Steam), then repair the driver entries with the
-# shared win_vrpath.sh (a bare Linux game path here is garbage under Wine and
-# makes the game pop a "steamvr driver path not found" dialog every boot).
-say "Seeding game-side openvrpaths.vrpath…"
-if [ -n "$DRY_RUN" ]; then
-    printf '\033[1;36m # \033[0mpython3 seeds $PFX/drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath with the SteamVR runtime path\n'
-else
-    python3 - "$PFX" <<'PYEOF'
-import json, os, sys
-pfx = sys.argv[1]
-p = os.path.join(pfx, 'drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath')
-os.makedirs(os.path.dirname(p), exist_ok=True)
-try:
-    data = json.load(open(p))
-except Exception:
-    data = {}
-runtime = [r for r in data.get('runtime', []) if 'vrclient' not in r.lower()]
-steamvr = r'C:\Program Files (x86)\Steam\steamapps\common\SteamVR'
-if steamvr not in runtime:
-    runtime.insert(0, steamvr)
-data['runtime'] = runtime
-data['version'] = 1
-json.dump(data, open(p, 'w'), indent=3)
-print("  runtime:", ", ".join(r[:50] for r in runtime))
-PYEOF
-fi
-run bash "$REPO/templates/win_vrpath.sh.in" "$PFX" "$GAME_DIR" "$S_TARGET"
-
-# -- scripts -----------------------------------------------------------------
-say "Deploying Linux driver shim (Ignition)…"
-run mkdir -p "$GAME_DIR/bin/linux64"
-bak "$GAME_DIR/bin/linux64/driver_standable.so"
-run rm -f "$GAME_DIR/bin/linux64/driver_standable.so"
-run cp "$IGN_LINUX64/libdriver_ignition.so" "$GAME_DIR/bin/linux64/driver_standable.so"
-bak "$GAME_DIR/bin/linux64/ignition_server.exe"
-run cp "$IGN_LINUX64/ignition_server.exe" "$GAME_DIR/bin/linux64/"
-bak "$GAME_DIR/bin/linux64/ignition_bridge.dll"
-run cp "$IGN_LINUX64/ignition_bridge.dll" "$GAME_DIR/bin/linux64/"
-
-# Steamworks runtime requirement of the Windows driver. driver_standable.dll
-# imports steam_api64.dll (SteamAPI_* init); without it ignition_server.exe
-# fails to load the driver, the handshake never completes and SteamVR aborts
-# with a ~21s watchdog timeout (safe-mode crash loop).
-# The Windows driver DLL lives in bin/win64/, and Wine's loader (with
-# LOAD_WITH_ALTERED_SEARCH_PATH) resolves driver_standable.dll's imports from
-# ITS OWN directory first - so steam_api64.dll MUST sit beside it in bin/win64/.
-# bin/linux64 is the Ignition server's working dir, so it also gets a copy.
-# The game does NOT ship steam_api64.dll (fresh installs only have
-# driver_standable.dll in bin/win64), so source it from the user's own Steam
-# library: another game that ships it (VRChat is the most likely; it's already
-# required for auto-calibration). Vendored copy is the last resort.
-bak "$GAME_DIR/bin/linux64/steam_api64.dll"
-resolve_steam_api64
-run cp "$SA64_SRC" "$GAME_DIR/bin/linux64/"
-bak "$GAME_DIR/bin/win64/steam_api64.dll"
-run cp "$SA64_SRC" "$GAME_DIR/bin/win64/"
-say "copied steam_api64.dll from $(basename "$(dirname "$SA64_SRC")")"
-
-# glibc compat check: warn early if the .so won't load on this system
-if command -v ldd >/dev/null 2>&1; then
-    _bad=$(ldd "$GAME_DIR/bin/linux64/driver_standable.so" 2>&1 | grep "not found" || true)
-    if [ -n "$_bad" ]; then
-        warn "driver_standable.so may fail to load on this system:"
-        echo "$_bad"
-        say "Rebuild from source or swap in upstream release binaries (see MANUAL.md)"
-    fi
-fi
-
-say "Installing launchers…"
-gen() { # gen <template> <dest> - substitute placeholders, write dest
-    S_TARGET="${S_TARGET:-$S_ROOT}"
-    if [ -n "$DRY_RUN" ]; then
-        printf '\033[1;36m # \033[0msed-substitute templates/%s -> %s\n' "$1" "$2"
-        return 0
-    fi
-    sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
-        -e "s|@PROTON@|$PROTON|g"       -e "s|@STEAMVR@|$STEAMVR|g" \
-        -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@S_ROOT@|$S_ROOT|g" -e "s|@S_TARGET@|$S_TARGET|g" -e "s|@APP_ID@|$APP_ID|g" \
-        -e "s|@HOME@|$HOME|g" \
-        -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
-        "$REPO/templates/$1" > "$2"
-}
-run mkdir -p "$HOME/.local/bin"
-bak "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
-gen launch_serverhelper.sh.in "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
-run chmod +x "$GAME_DIR/bin/linux64/launch_serverhelper.sh"
-# shared Proton resolver (sourced by launch_serverhelper.sh + launch hook)
-gen proton_resolve.sh.in "$GAME_DIR/bin/linux64/proton_resolve.sh"
-# shared stale-wineserver sweep (sourced by launch_serverhelper.sh + launch
-# hook instead of a copy in each - the copies already drifted once)
-gen sweep.sh.in "$GAME_DIR/bin/linux64/sweep.sh"
-# Windows-side driver registration repair (run by both launch scripts)
-run cp "$REPO/templates/win_vrpath.sh.in" "$GAME_DIR/bin/linux64/win_vrpath.sh"
-run chmod +x "$GAME_DIR/bin/linux64/win_vrpath.sh"
-# python3 interpreter shim: Proton's launcher needs Python >= 3.11 but
-# SteamVR runs this driver under the Sniper sandbox (Python 3.9 only).
-# launch_serverhelper.sh prepends its own dir to PATH so `env python3`
-# resolves to this shim. Must be named exactly `python3`.
-bak "$GAME_DIR/bin/linux64/python3"
-gen proton_python.sh.in "$GAME_DIR/bin/linux64/python3"
-run chmod +x "$GAME_DIR/bin/linux64/python3"
-gen ignition.json.in "$GAME_DIR/bin/linux64/ignition.json"
-# retire legacy GUI launcher from older installs
-run rm -fv "$HOME/bin/standable-gui" "$HOME/Desktop/Standable GUI.desktop" "$HOME/Desktop/standable-gui.desktop"
-# Launch hook goes in ~/.local/bin (XDG, hidden - no ~/ clutter). Older
-# installs used ~/bin; keep that copy in sync too so existing Steam launch
-# options pointing there keep working.
-bak "$HOME/.local/bin/standable_launch_hook.sh"
-gen standable_launch_hook.sh.in "$HOME/.local/bin/standable_launch_hook.sh"
-run chmod +x "$HOME/.local/bin/standable_launch_hook.sh"
-if [ -f "$HOME/bin/standable_launch_hook.sh" ]; then
-    bak "$HOME/bin/standable_launch_hook.sh"
-    gen standable_launch_hook.sh.in "$HOME/bin/standable_launch_hook.sh"
-    run chmod +x "$HOME/bin/standable_launch_hook.sh"
-    say "Note: launch hook moved to ~/.local/bin - update Steam Launch Options to:"
-    say "  bash \$HOME/.local/bin/standable_launch_hook.sh %command%"
-    say "(old ~/bin copy kept working until you switch; uninstall removes both)"
-fi
-
-# --no-safemode: SteamVR drops into Safe Mode after a driver crash, which
-# hides add-ons (incl. standable). Persist enableSafeMode=false so it doesn't
-# keep re-triggering.
-if [ -n "$NO_SAFEMODE" ]; then
-    CFG="$STEAM_ROOT/config/steamvr.vrsettings"
-    if [ -f "$CFG" ]; then
-        say "Disabling SteamVR Safe Mode (--no-safemode)…"
-        if [ -n "$DRY_RUN" ]; then
-            printf '\033[1;36m # \033[0mpython3 sets steamvr.enableSafeMode=false in %s\n' "$CFG"
-        else
-            python3 - "$CFG" <<'PY'
-import json, sys
-cfg = sys.argv[1]
-d = json.load(open(cfg))
-sv = d.setdefault("steamvr", {})
-if sv.get("enableSafeMode", False) is not False:
-    sv["enableSafeMode"] = False
-    json.dump(d, open(cfg, "w"), indent=3, sort_keys=False)
-    print("  steamvr.enableSafeMode = false")
-PY
-        fi
-    fi
-    # The crash-timestamp file is what actually flips SteamVR into Safe Mode
-    # (and blocks standable as "blocked by a previous safe mode event" before
-    # it loads). enableSafeMode=false alone isn't enough - SteamVR re-triggers
-    # from this file. Delete it too.
-    if [ -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt" ]; then
-        run rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
-        say "Cleared SteamVR crash-timestamp (safe-mode trigger)"
-    fi
-fi
-
-if [ -n "$DRY_RUN" ]; then
-    say "Dry run complete - nothing was changed. Copy the commands above, or run without --dry-run to apply."
-else
-    say "Done."
-    cat <<EOF
-
-  Next steps:
-    Start SteamVR, then click Play on Standable.
-    To get the settings window on your desktop while SteamVR runs:
-      Right-click Standable in Steam → Properties → Launch Options, set:
-        bash $HOME/.local/bin/standable_launch_hook.sh %command%
-
-  Verify anytime with:  $REPO/install.sh --check
-  Log for this run:     $LOG_FILE
-  Build from source:    $REPO/install.sh --build --force
-  Problems?             See README.md (Logging & diagnostics), or run ./standable check.
-EOF
-fi
+say "Uninstall complete - patch artifacts removed; official driver and registration kept."
+echo
+say "Final step in Steam: Standable -> Properties -> Installed Files ->"
+say "  \"Verify integrity of game files\""
+say "That restores any official Linux file the patch replaced."
+say "If anything still looks wrong, uninstall/reinstall Standable (~50 MB)."
+exit 0

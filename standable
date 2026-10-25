@@ -1,48 +1,40 @@
 #!/bin/bash
-# standable - front door for the Standable FBE Linux patch.
-# Usage: ./standable [install|check|uninstall] [options]
+# standable - front door for the retired Standable FBE Linux patch.
+# The repo is now only an uninstaller for older installs.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "${1:-help}" in
-    install)
-        exec "$DIR/install.sh" "${@:2}"
-        ;;
-    check|status)
-        exec "$DIR/install.sh" --check "${@:2}"
-        ;;
     uninstall|remove)
-        exec "$DIR/install.sh" --uninstall
+        exec "$DIR/install.sh" --uninstall "${@:2}"
         ;;
-    proton)
-        [ -n "${2:-}" ] || { echo "Usage: ./standable install --proton /path/to/proton" >&2; exit 1; }
-        exec "$DIR/install.sh" --proton "$2"
+    install|check|status)
+        echo "This patch is retired: Standable now has official Linux support."
+        echo "Install/launch Standable normally through Steam."
+        echo "If you used an older version of this patch: ./standable uninstall"
+        exit 0
         ;;
     --version|-v)
-        echo "standable v1.0.0"; exit 0;;
+        echo "standable (retired)"; exit 0
+        ;;
     help|--help|-h|*)
         cat <<EOF
-Standable Full Body Estimation - Linux patch
+Standable Full Body Estimation: the old Linux patch
+
+Standable now supports Linux officially. This repo is only here to clean up
+older installs.
 
 Usage: ./standable <command>
 
-  install            Install or repair (safe to re-run)
-                       options: --proton /path/to/proton
-                       options: --build (rebuild the bridge from source)
-                       options: --dry-run (print every command, change nothing)
-                       options: --no-safemode (disable SteamVR Safe Mode)
-  check              Verify the installed setup (writes full diagnostics)
-  uninstall          Remove everything this patch added
+  uninstall          Remove everything the patch added
+                       options: --dry-run (print commands, change nothing)
+                       options: --assume-yes (allow while SteamVR runs)
 
-Typical flow:
-  ./standable install
-  # set the launch hook in Steam Launch Options:
-  #   bash ~/.local/bin/standable_launch_hook.sh %command%
-  # then start SteamVR and launch Standable from Steam to get the desktop
-  # settings window. The hook is what shows the desktop GUI and keeps the
-  # game and driver on the same Proton/prefix.
+After uninstalling, run Steam's Verify integrity check for Standable:
+  Standable -> Properties -> Installed Files -> "Verify integrity of game files"
 
-Logs: ~/.local/state/standable/{install,hook,serverhelper}.log
+I'm still working on the WiVRn port:
+  https://github.com/meeyao/standable-wivrn-port
 EOF
         ;;
 esac
